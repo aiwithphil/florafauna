@@ -47,8 +47,20 @@ export function VideoGenerateNode({ data }: NodeProps) {
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          className="w-full h-20 p-2 text-sm rounded border bg-transparent"
+          className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag nowheel"
           placeholder="Enter prompt"
+          draggable={false}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseMove={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onDragStart={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
         />
         <div className="flex items-center gap-2">
           <button
