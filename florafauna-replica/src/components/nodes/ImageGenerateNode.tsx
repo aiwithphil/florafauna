@@ -1,17 +1,25 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
-import { Handle, Position, NodeProps } from "@xyflow/react";
+import React, { useCallback, useEffect, useState } from "react";
+import { Handle, Position, NodeProps, useReactFlow } from "@xyflow/react";
+import NextImage from "next/image";
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
 
-export function ImageGenerateNode({ data }: NodeProps) {
+export function ImageGenerateNode({ id, data }: NodeProps) {
+  const rf = useReactFlow();
   const initialPrompt = asString((data as Record<string, unknown> | undefined)?.["prompt"], "A watercolor painting of a fern in a misty forest");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    rf.setNodes((nds) =>
+      nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, prompt } } : n))
+    );
+  }, [prompt, id, rf]);
 
   const run = useCallback(async () => {
     setIsLoading(true);
@@ -22,15 +30,17 @@ export function ImageGenerateNode({ data }: NodeProps) {
         body: JSON.stringify({ prompt, size: "512x512" }),
       });
       const json = await res.json();
-      if (json.url) {
-        setImageUrl(json.url);
-      } else if (json.b64) {
-        setImageUrl(`data:image/png;base64,${json.b64}`);
+      const url: string | null = json.url || (json.b64 ? `data:image/png;base64,${json.b64}` : null);
+      setImageUrl(url);
+      if (url) {
+        rf.setNodes((nds) =>
+          nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, imageUrl: url } } : n))
+        );
       }
     } finally {
       setIsLoading(false);
     }
-  }, [prompt]);
+  }, [prompt, id, rf]);
 
   return (
     <div className="bg-background border rounded-md shadow-sm w-[360px]">
@@ -56,7 +66,7 @@ export function ImageGenerateNode({ data }: NodeProps) {
           <label className="text-xs font-medium">Result</label>
           <div className="w-full h-[256px] bg-black/5 rounded grid place-items-center overflow-hidden">
             {imageUrl ? (
-              <img src={imageUrl} alt="result" className="object-cover w-full h-full" />
+              <NextImage src={imageUrl} alt="result" width={512} height={512} className="object-cover w-full h-full" unoptimized />
             ) : (
               <span className="text-xs text-foreground/60">
                 {isLoading ? "Generating image..." : "No image yet"}
