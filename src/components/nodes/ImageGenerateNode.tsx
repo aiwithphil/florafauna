@@ -19,7 +19,7 @@ export function ImageGenerateNode({ data }: NodeProps) {
       const res = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, size: "512x512" }),
+        body: JSON.stringify({ prompt, size: "1024x1024" }),
       });
       const json = await res.json();
       if (json.url) {

@@ -1,0 +1,83 @@
+"use client";
+
+import React, { useCallback, useState } from "react";
+import { Handle, Position, NodeProps } from "@xyflow/react";
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+export function VideoGenerateNode({ data }: NodeProps) {
+  const initialPrompt = asString(
+    (data as Record<string, unknown> | undefined)?.["prompt"],
+    "A short looping animation of leaves swaying in the wind"
+  );
+  const [prompt, setPrompt] = useState<string>(initialPrompt);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/generate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, duration: 5, ratio: "1280:720" }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json?.error ?? "Failed to generate video");
+        return;
+      }
+      setError(null);
+      if (json.url) {
+        setVideoUrl(json.url);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [prompt]);
+
+  return (
+    <div className="bg-background border rounded-md shadow-sm w-[360px]">
+      <div className="px-3 py-2 border-b text-sm font-semibold">Video Generate</div>
+      <div className="p-3 space-y-2">
+        <label className="text-xs font-medium">Prompt</label>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          className="w-full h-20 p-2 text-sm rounded border bg-transparent"
+          placeholder="Enter prompt"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={run}
+            disabled={isLoading}
+            className="px-3 py-1.5 text-sm rounded bg-foreground text-background disabled:opacity-60"
+          >
+            {isLoading ? "Generating..." : "Generate"}
+          </button>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium">Result</label>
+          <div className="w-full h-[256px] bg-black/5 rounded grid place-items-center overflow-hidden">
+            {videoUrl ? (
+              <video src={videoUrl} controls className="object-cover w-full h-full" />
+            ) : (
+              <span className="text-xs text-foreground/60">
+                {isLoading ? "Generating video..." : error ?? "No video yet"}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <Handle type="source" position={Position.Right} />
+      <Handle type="target" position={Position.Left} />
+    </div>
+  );
+}
+
+export default VideoGenerateNode;
+
+
