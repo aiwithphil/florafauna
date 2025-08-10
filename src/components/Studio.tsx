@@ -176,6 +176,7 @@ export function Studio() {
           selectionMode={SelectionMode.Partial}
           panOnDrag={false}
           translateExtent={[[ -100000, -100000 ], [ 100000, 100000 ]]}
+          minZoom={0.25}
           defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           onInit={(instance) => {
             instanceRef.current = instance;
