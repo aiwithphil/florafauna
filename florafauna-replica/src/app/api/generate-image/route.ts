@@ -20,12 +20,13 @@ type AllowedSize = (typeof AllowedSizes)[number];
 const bodySchema = z.object({
   prompt: z.string().min(1),
   size: z.enum(AllowedSizes).optional().default("1024x1024"),
+  model: z.string().optional().default("gpt-image-1"),
 });
 
 export async function POST(req: NextRequest) {
   try {
     const json = await req.json();
-    const { prompt, size } = bodySchema.parse(json);
+    const { prompt, size, model } = bodySchema.parse(json);
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
     const client = new OpenAI({ apiKey });
 
     const result = await client.images.generate({
-      model: "gpt-image-1",
+      model,
       prompt,
       size: size as AllowedSize,
     });

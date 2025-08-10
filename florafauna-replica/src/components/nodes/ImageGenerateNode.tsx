@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Handle, Position, NodeProps, useReactFlow } from "@xyflow/react";
 import NextImage from "next/image";
+import { imageModels } from "@/lib/models";
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
@@ -11,7 +12,9 @@ function asString(value: unknown, fallback: string): string {
 export function ImageGenerateNode({ id, data }: NodeProps) {
   const rf = useReactFlow();
   const initialPrompt = asString((data as Record<string, unknown> | undefined)?.["prompt"], "A watercolor painting of a fern in a misty forest");
+  const initialModel = asString((data as Record<string, unknown> | undefined)?.["model"], imageModels[0]);
   const [prompt, setPrompt] = useState<string>(initialPrompt);
+  const [model, setModel] = useState<string>(initialModel);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -21,13 +24,19 @@ export function ImageGenerateNode({ id, data }: NodeProps) {
     );
   }, [prompt, id, rf]);
 
+  useEffect(() => {
+    rf.setNodes((nds) =>
+      nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, model } } : n))
+    );
+  }, [model, id, rf]);
+
   const run = useCallback(async () => {
     setIsLoading(true);
     try {
       const res = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, size: "512x512" }),
+        body: JSON.stringify({ prompt, size: "512x512", model }),
       });
       const json = await res.json();
       const url: string | null = json.url || (json.b64 ? `data:image/png;base64,${json.b64}` : null);
@@ -40,12 +49,22 @@ export function ImageGenerateNode({ id, data }: NodeProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, id, rf]);
+  }, [prompt, model, id, rf]);
 
   return (
     <div className="bg-background border rounded-md shadow-sm w-[360px]">
-      <div className="px-3 py-2 border-b text-sm font-semibold">Image Generate</div>
+      <div className="px-3 py-2 border-b text-sm font-semibold">Image Block</div>
       <div className="p-3 space-y-2">
+        <label className="text-xs font-medium">Model</label>
+        <select
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="w-full p-2 text-sm rounded border bg-transparent"
+        >
+          {imageModels.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
         <label className="text-xs font-medium">Prompt</label>
         <textarea
           value={prompt}

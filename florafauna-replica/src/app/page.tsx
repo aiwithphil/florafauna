@@ -6,7 +6,7 @@ export default function Home() {
       <header className="h-16 border-b flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
           <span className="font-semibold">FloraFauna Studio</span>
-          <span className="text-xs text-foreground/60">MVP</span>
+          <span className="text-xs text-foreground/60">Blocks</span>
         </div>
         <div className="text-xs text-foreground/60">Local session</div>
       </header>
