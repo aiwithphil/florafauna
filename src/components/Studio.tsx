@@ -159,6 +159,11 @@ export function Studio() {
     setNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, data: { ...(n.data as Record<string, unknown>), ...partial } } : n)));
   }, [setNodes]);
 
+  // Programmatically select a node (used by toolbars)
+  const selectNode = useCallback((nodeId: string) => {
+    setNodes((prev) => prev.map((n) => ({ ...n, selected: n.id === nodeId })));
+  }, [setNodes]);
+
   // Open node context menu from node component
   const openNodeContextMenu = useCallback((nodeId: string, clientX: number, clientY: number) => {
     setNodeMenuTargetId(nodeId);
@@ -317,6 +322,7 @@ export function Studio() {
               ...(n.data as Record<string, unknown>),
               _update: updateNodeData,
               _openMenu: openNodeContextMenu,
+              _select: selectNode,
             },
           })) as unknown as Node[]}
           edges={edges}
