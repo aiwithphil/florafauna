@@ -1,19 +1,27 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Handle, Position, NodeProps } from "@xyflow/react";
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
 
-export function TextGenerateNode({ data }: NodeProps) {
-  const initialPrompt = asString((data as Record<string, unknown> | undefined)?.["prompt"], "Write a haiku about forests.");
-  const initialOutput = asString((data as Record<string, unknown> | undefined)?.["output"], "");
+export function TextGenerateNode({ id, data }: NodeProps) {
+  const d = (data as Record<string, unknown>) || {};
+  const update = (d as any)?._update as ((nodeId: string, partial: Record<string, unknown>) => void) | undefined;
+  const openMenu = (d as any)?._openMenu as ((nodeId: string, x: number, y: number) => void) | undefined;
+  const initialPrompt = asString(d["prompt"], "Write a haiku about forests.");
+  const initialOutput = asString(d["output"], "");
 
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [output, setOutput] = useState<string>(initialOutput);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    update?.(id, { prompt: initialPrompt, output: initialOutput });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const run = useCallback(async () => {
     setIsLoading(true);
@@ -24,20 +32,33 @@ export function TextGenerateNode({ data }: NodeProps) {
         body: JSON.stringify({ prompt }),
       });
       const json = await res.json();
-      setOutput(json.text ?? "");
+      const newOutput = json.text ?? "";
+      setOutput(newOutput);
+      update?.(id, { output: newOutput });
     } finally {
       setIsLoading(false);
     }
-  }, [prompt]);
+  }, [prompt, id, update]);
 
   return (
-    <div className="bg-background border rounded-md shadow-sm w-[360px]">
+    <div
+      className="bg-background border rounded-md shadow-sm w-[360px]"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openMenu?.(id, e.clientX, e.clientY);
+      }}
+    >
       <div className="px-3 py-2 border-b text-sm font-semibold">Text Generate</div>
       <div className="p-3 space-y-2">
         <label className="text-xs font-medium">Prompt</label>
         <textarea
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setPrompt(v);
+            update?.(id, { prompt: v });
+          }}
           className="w-full h-24 p-2 text-sm rounded border bg-transparent nodrag"
           placeholder="Enter prompt"
           draggable={false}
