@@ -5,10 +5,14 @@ export const runtime = "nodejs";
 
 const AllowedRatios = [
   "1:1",
+  "21:9",
   "16:9",
   "4:3",
+  "3:2",
   "3:4",
+  "2:3",
   "9:16",
+  "9:21",
 ] as const;
 
 const bodySchema = z.object({
@@ -51,16 +55,27 @@ export async function POST(req: NextRequest) {
       switch (r) {
         case "1:1":
           return { width: 1024, height: 1024 };
+        case "21:9":
+          // Multiples of 64; ultra-wide
+          return { width: 1344, height: 576 };
         case "16:9":
           // Use multiples of 64 for compatibility
           return { width: 1024, height: 576 };
         case "4:3":
           return { width: 1024, height: 768 };
+        case "3:2":
+          // Higher total pixels but within typical limits
+          return { width: 1536, height: 1024 };
         case "3:4":
           return { width: 768, height: 1024 };
+        case "2:3":
+          return { width: 1024, height: 1536 };
         case "9:16":
           // Use multiples of 64 for compatibility
           return { width: 576, height: 1024 };
+        case "9:21":
+          // Ultra-tall
+          return { width: 576, height: 1344 };
         default:
           return { width: 1024, height: 1024 };
       }
