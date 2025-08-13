@@ -21,6 +21,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [imageUrl, setImageUrl] = useState<string | null>((typeof d["imageUrl"] === "string" ? (d["imageUrl"] as string) : null));
   const promptLocked = Boolean((d as any)?.promptLocked);
   const [isLoading, setIsLoading] = useState(false);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isToolbarHover, setIsToolbarHover] = useState(false);
   const [isBridgeHover, setIsBridgeHover] = useState(false);
@@ -30,6 +31,16 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [imgModel, setImgModel] = useState(initialImgModel);
   const [openWhich, setOpenWhich] = useState<null | "ratio" | "model">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
+  function sanitizeEnhancedPrompt(text: string): string {
+    let s = (text ?? "").trim();
+    s = s.replace(/^\s*(\*\*)?\s*Enhanced Prompt:?\s*(\*\*)?\s*\n*/i, "");
+    s = s.replace(/\*\*/g, "");
+    s = s
+      .split("\n")
+      .map((line) => line.replace(/^\s*(?:[-*•]\s*)?(?:\[\s*[xX]?\s*\]\s*)?/, ""))
+      .join("\n");
+    return s.trim();
+  }
 
   // Sync local prompt view when locked and upstream text output updates
   useEffect(() => {
@@ -420,16 +431,32 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
             {/* Enhance prompt */}
             <div className="relative group">
               <button
-                className="text-xs px-2 py-1 rounded hover:bg-foreground/10"
+                className="text-xs px-2 py-1 rounded hover:bg-foreground/10 disabled:opacity-60"
                 title="Enhance prompt"
-                onClick={() => {
-                  // simple enhancement stub for now
-                  const enhanced = `${prompt}\n\nAdd intricate botanical detail and soft natural lighting.`;
-                  setPrompt(enhanced);
-                  update?.(id, { prompt: enhanced });
+                disabled={isEnhancing}
+                onClick={async () => {
+                  try {
+                    setIsEnhancing(true);
+                    const instruction =
+                      "You are an AI prompt enhancer for text-to-image generation. Take the user’s raw prompt and rewrite it into a detailed, vivid, and coherent description that maximizes visual quality, style consistency, and creativity. Preserve the original concept, but expand it with rich sensory details, precise artistic terms, and relevant keywords. Specify composition, lighting, perspective, colors, environment, style, and mood. Avoid unnecessary repetition. Do not add elements that contradict the original idea. Output only the final enhanced prompt.";
+                    const composed = `${instruction}\n\nRaw prompt:\n"""\n${prompt}\n"""`;
+                    const res = await fetch("/api/generate-text", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ prompt: composed }),
+                    });
+                    const json = await res.json();
+                    const enhancedPrompt = sanitizeEnhancedPrompt(json?.text ?? "");
+                    if (enhancedPrompt) {
+                      setPrompt(enhancedPrompt);
+                      update?.(id, { prompt: enhancedPrompt });
+                    }
+                  } finally {
+                    setIsEnhancing(false);
+                  }
                 }}
               >
-                ✨
+                {isEnhancing ? "…" : "✨"}
               </button>
               <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Enhance Prompt</div>
             </div>
