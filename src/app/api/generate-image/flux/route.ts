@@ -87,6 +87,35 @@ export async function POST(req: NextRequest) {
     // Base dimensions
     let { width, height } = dimsForRatio(ratio);
 
+    // Override sizes ONLY for Flux Dev per requested mappings
+    if (model === "Flux Dev") {
+      switch (ratio) {
+        case "1:1":
+          width = 1440;
+          height = 1440;
+          break;
+        case "16:9":
+          width = 1440;
+          height = 800;
+          break;
+        case "4:3":
+          width = 1440;
+          height = 1088;
+          break;
+        case "3:4":
+          width = 1088;
+          height = 1440;
+          break;
+        case "9:16":
+          width = 800;
+          height = 1440;
+          break;
+        default:
+          // Leave other ratios as initially computed
+          break;
+      }
+    }
+
     // For Flux Pro 1.1 / Ultra, target ~2x dimensions while respecting a ~4MP ceiling
     // Reference: FLUX1.1 [pro] Ultra docs (up to 4MP) https://docs.bfl.ai/flux_models/flux_1_1_pro_ultra_raw
     if (model === "Flux Pro 1.1" || model === "Flux Pro 1.1 Ultra") {
