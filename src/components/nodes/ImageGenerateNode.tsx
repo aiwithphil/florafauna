@@ -15,6 +15,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
   const initialPrompt = asString(d["prompt"], "A watercolor painting of a fern in a misty forest");
   const initialImgRatio = asString(d["imgRatio"], "1:1");
+  const initialImgRatioApplied = asString((d as any)?.imgRatioApplied, initialImgRatio);
   const initialImgModel = asString(d["imgModel"], "GPT Image");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [imageUrl, setImageUrl] = useState<string | null>((typeof d["imageUrl"] === "string" ? (d["imageUrl"] as string) : null));
@@ -23,7 +24,9 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isToolbarHover, setIsToolbarHover] = useState(false);
   const [isBridgeHover, setIsBridgeHover] = useState(false);
-  const [imgRatio, setImgRatio] = useState(initialImgRatio);
+  // Separate the selected ratio (used for next generation) from the applied ratio (used to size the current image container)
+  const [imgRatioSelected, setImgRatioSelected] = useState(initialImgRatio);
+  const [imgRatioApplied, setImgRatioApplied] = useState(initialImgRatioApplied);
   const [imgModel, setImgModel] = useState(initialImgModel);
   const [openWhich, setOpenWhich] = useState<null | "ratio" | "model">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
@@ -192,16 +195,16 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
     ];
   }, [imgModel]);
 
-  // Ensure current ratio is valid for the selected model; if not, default to the first option
+  // Ensure currently selected ratio is valid for the chosen model; if not, default to the first option
   useEffect(() => {
     const allOptions = sizeGroups.flatMap((g) => g.options.map((o) => o.value));
     if (allOptions.length === 0) return;
-    if (!allOptions.includes(imgRatio)) {
+    if (!allOptions.includes(imgRatioSelected)) {
       const next = allOptions[0];
-      setImgRatio(next);
-      update?.(id, { imgRatio: next });
+      setImgRatioSelected(next);
+      update?.(id, { imgRatio: next, imgRatioSelected: next });
     }
-  }, [imgModel, sizeGroups, imgRatio, id, update]);
+  }, [imgModel, sizeGroups, imgRatioSelected, id, update]);
 
   const ratioLabel = (value: string) => {
     switch (value) {
@@ -219,7 +222,14 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   };
 
   useEffect(() => {
-    update?.(id, { prompt: initialPrompt, imageUrl: imageUrl ?? "", imgRatio: initialImgRatio, imgModel: initialImgModel });
+    update?.(id, {
+      prompt: initialPrompt,
+      imageUrl: imageUrl ?? "",
+      imgRatio: initialImgRatio, // legacy field for backward compatibility
+      imgRatioSelected: imgRatioSelected,
+      imgRatioApplied: imgRatioApplied,
+      imgModel: initialImgModel,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -262,6 +272,10 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         }
       }
 
+      // Apply the selected ratio for display when a new generation starts
+      setImgRatioApplied(imgRatioSelected);
+      update?.(id, { imgRatioApplied: imgRatioSelected });
+
       const isFlux = imgModel.startsWith("Flux ");
       const isImagen = imgModel === "Imagen 4";
       const isIdeogram = imgModel === "Ideogram 3.0";
@@ -273,12 +287,12 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         ? "/api/generate-image/ideogram"
         : "/api/generate-image";
       const body = isFlux
-        ? { prompt: effectivePrompt, model: imgModel, ratio: imgRatio }
+        ? { prompt: effectivePrompt, model: imgModel, ratio: imgRatioSelected }
         : isImagen
-        ? { prompt: effectivePrompt, ratio: imgRatio }
+        ? { prompt: effectivePrompt, ratio: imgRatioSelected }
         : isIdeogram
-        ? { prompt: effectivePrompt, ratio: imgRatio }
-        : { prompt: effectivePrompt, size: mapRatioToGptSize(imgRatio) ?? "1024x1024" };
+        ? { prompt: effectivePrompt, ratio: imgRatioSelected }
+        : { prompt: effectivePrompt, size: mapRatioToGptSize(imgRatioSelected) ?? "1024x1024" };
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -297,7 +311,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, imgRatio, imgModel, id, update, promptLocked, resolveContextText]);
+  }, [prompt, imgRatioSelected, imgModel, id, update, promptLocked, resolveContextText]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
 
@@ -330,7 +344,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
             {/* Ratio */}
             <div className="relative group">
               <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
-                <span>{imgRatio === "auto" ? "Auto" : imgRatio}</span>
+                <span>{imgRatioSelected === "auto" ? "Auto" : imgRatioSelected}</span>
                 <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                   <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
                 </svg>
@@ -346,14 +360,18 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
                           key={opt.value}
                           className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
                           onClick={() => {
-                            setImgRatio(opt.value);
-                            update?.(id, { imgRatio: opt.value });
+                            // Only apply immediately if we don't yet have an image; otherwise wait until next generation starts
+                            setImgRatioSelected(opt.value);
+                            if (!imageUrl) {
+                              setImgRatioApplied(opt.value);
+                            }
+                            update?.(id, { imgRatio: opt.value, imgRatioSelected: opt.value, ...(imageUrl ? {} : { imgRatioApplied: opt.value }) });
                             setOpenWhich(null);
                           }}
                         >
                           <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.value} /></span>
                           <span className="flex-1">{opt.label}</span>
-                          <span className="inline-flex w-4 justify-end">{imgRatio === opt.value ? "✓" : ""}</span>
+                          <span className="inline-flex w-4 justify-end">{imgRatioSelected === opt.value ? "✓" : ""}</span>
                         </button>
                       ))}
                     </div>
@@ -439,6 +457,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
           onMouseDown={(e) => e.stopPropagation()}
           onMouseMove={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           onDragStart={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
           onTouchMove={(e) => e.stopPropagation()}
@@ -455,8 +474,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         </div>
         <div className="space-y-1">
           <label className="text-xs font-medium">Result</label>
-          <div className={`w-full bg-black/5 rounded overflow-hidden ${imgRatio === "auto" ? "aspect-square" : ""}`} style={imgRatio !== "auto" ? (() => {
-            const p = parseAspect(imgRatio);
+          <div className={`w-full bg-black/5 rounded overflow-hidden ${imgRatioApplied === "auto" ? "aspect-square" : ""}`} style={imgRatioApplied !== "auto" ? (() => {
+            const p = parseAspect(imgRatioApplied);
             if (!p) return {} as React.CSSProperties;
             const [w, h] = p;
             return { aspectRatio: `${w} / ${h}` } as React.CSSProperties;

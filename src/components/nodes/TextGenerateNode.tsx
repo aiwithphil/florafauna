@@ -160,6 +160,7 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
           onMouseDown={(e) => e.stopPropagation()}
           onMouseMove={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           onDragStart={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
           onTouchMove={(e) => e.stopPropagation()}
@@ -192,6 +193,12 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
             onMouseDown={(e) => e.stopPropagation()}
             onMouseMove={(e) => e.stopPropagation()}
             onMouseUp={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              // Select all output text on double click
+              const el = e.currentTarget as HTMLTextAreaElement;
+              el.select();
+              e.stopPropagation();
+            }}
             onDragStart={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
             onTouchMove={(e) => e.stopPropagation()}

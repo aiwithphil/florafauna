@@ -113,6 +113,7 @@ export function Studio() {
   }, [openNewBlockMenuAt]);
 
   const getSelectedNode = useCallback(() => nodes.find((n) => (n as any).selected), [nodes]);
+  const getSelectedNodes = useCallback(() => nodes.filter((n) => (n as any).selected), [nodes]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null;
@@ -142,14 +143,7 @@ export function Studio() {
     }
     if (isMod && (e.key === "d" || e.key === "D")) {
       e.preventDefault();
-      const sel = getSelectedNode();
-      if (sel) {
-        const { dx, dy } = getSpawnOffset();
-        const id = `${idRef.current++}`;
-        const position = { x: sel.position.x + 380 + dx, y: sel.position.y + dy };
-        const newNode: Node = { id, type: sel.type as keyof typeof nodeTypes, position, data: { ...(sel.data as Record<string, unknown>) } } as Node;
-        setNodes((nds) => nds.concat(newNode));
-      }
+      duplicateSelectedAtPointer();
       return;
     }
 
@@ -166,6 +160,58 @@ export function Studio() {
       }
     }
   }, [getSelectedNode, nodeClipboard, getSpawnOffset, openNewBlockMenuAt]);
+
+  const getPointerFlowPosition = useCallback(() => {
+    const inst = instanceRef.current;
+    if (!inst) return null;
+    const last = lastPointerRef.current;
+    const bounds = wrapperRef.current?.getBoundingClientRect();
+    const fallback = bounds
+      ? { x: bounds.left + (bounds.width / 2), y: bounds.top + (bounds.height / 2) }
+      : { x: 0, y: 0 };
+    const screen = last ?? fallback;
+    return inst.screenToFlowPosition({ x: screen.x, y: screen.y });
+  }, []);
+
+  const duplicateSelectedAtPointer = useCallback((fallbackId?: string) => {
+    const pointerPos = getPointerFlowPosition();
+    if (!pointerPos) return;
+    const selectedNodes = getSelectedNodes();
+    const groupNodes = selectedNodes.length > 0
+      ? selectedNodes
+      : (fallbackId ? nodes.filter((n) => n.id === fallbackId) : []);
+    if (groupNodes.length === 0) return;
+
+    // Compute group center
+    const center = groupNodes.reduce((acc, n) => ({ x: acc.x + n.position.x, y: acc.y + n.position.y }), { x: 0, y: 0 });
+    center.x /= groupNodes.length;
+    center.y /= groupNodes.length;
+
+    const idMap = new Map<string, string>();
+    const newNodes: Node[] = groupNodes.map((n) => {
+      const newId = `${idRef.current++}`;
+      idMap.set(n.id, newId);
+      const dx = n.position.x - center.x;
+      const dy = n.position.y - center.y;
+      return {
+        id: newId,
+        type: n.type as keyof typeof nodeTypes,
+        position: { x: pointerPos.x + dx, y: pointerPos.y + dy },
+        data: { ...(n.data as Record<string, unknown>) },
+      } as Node;
+    });
+    const selectedIdSet = new Set(groupNodes.map((n) => n.id));
+    const newEdges: Edge[] = edges
+      .filter((e) => selectedIdSet.has(e.source) && selectedIdSet.has(e.target))
+      .map((e) => ({
+        ...e,
+        id: `${idMap.get(e.source)!}-${idMap.get(e.target)!}-${Math.random().toString(36).slice(2, 8)}`,
+        source: idMap.get(e.source)!,
+        target: idMap.get(e.target)!,
+      }));
+    setNodes((nds) => nds.concat(newNodes));
+    if (newEdges.length) setEdges((eds) => eds.concat(newEdges));
+  }, [getPointerFlowPosition, getSelectedNodes, nodes, edges]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -208,15 +254,14 @@ export function Studio() {
   const getNodeById = useCallback((id: string | null) => nodes.find((n) => n.id === id), [nodes]);
 
   const duplicateNode = useCallback((targetId: string) => {
-    const source = nodes.find((n) => n.id === targetId);
-    if (!source) return;
-    const id = `${idRef.current++}`;
-    const { dx, dy } = getSpawnOffset();
-    const position = { x: source.position.x + 380 + dx, y: source.position.y + dy };
-    // Include full data clone
-    const clonedData = { ...(source.data as Record<string, unknown>) };
-    const newNode: Node = { id, type: source.type as keyof typeof nodeTypes, position, data: clonedData } as Node;
-    setNodes((nds) => nds.concat(newNode));
+    // Duplicate at pointer; if multiple are selected, duplicate the whole selection at pointer
+    const selected = nodes.filter((n) => (n as any).selected);
+    if (selected.length > 1 || (selected.length === 1 && selected[0].id !== targetId)) {
+      duplicateSelectedAtPointer();
+      return;
+    }
+    // Fallback: duplicate just this node at pointer
+    duplicateSelectedAtPointer(targetId);
   }, [nodes, setNodes, getSpawnOffset]);
 
   const pasteNodeAtPointer = useCallback(() => {
