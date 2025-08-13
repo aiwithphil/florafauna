@@ -252,14 +252,19 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
 
       const isFlux = imgModel.startsWith("Flux ");
       const isImagen = imgModel === "Imagen 4";
+      const isIdeogram = imgModel === "Ideogram 3.0";
       const endpoint = isFlux
         ? "/api/generate-image/flux"
         : isImagen
         ? "/api/generate-image/imagen"
+        : isIdeogram
+        ? "/api/generate-image/ideogram"
         : "/api/generate-image";
       const body = isFlux
         ? { prompt, model: imgModel, ratio: imgRatio }
         : isImagen
+        ? { prompt, ratio: imgRatio }
+        : isIdeogram
         ? { prompt, ratio: imgRatio }
         : { prompt, size: mapRatioToGptSize(imgRatio) ?? "1024x1024" };
 
