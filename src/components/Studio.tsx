@@ -209,11 +209,17 @@ export function Studio() {
   }, [setNodes, setEdges]);
 
   const downloadMedia = useCallback(async (url: string, filename: string) => {
-    // Use server-side proxy to avoid CORS and force attachment
-    const proxyUrl = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
     const a = document.createElement("a");
-    a.href = proxyUrl;
-    a.download = filename;
+    // If it's a data URL, link directly to avoid very long query strings
+    if (url.startsWith("data:")) {
+      a.href = url;
+      a.download = filename;
+    } else {
+      // Use server-side proxy to avoid CORS and force attachment
+      const proxyUrl = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
+      a.href = proxyUrl;
+      a.download = filename;
+    }
     document.body.appendChild(a);
     a.click();
     a.remove();

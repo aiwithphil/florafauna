@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 // Proxies a remote file and forces a download disposition
 export async function GET(req: NextRequest) {
@@ -13,6 +13,26 @@ export async function GET(req: NextRequest) {
         status: 400,
         headers: { "content-type": "application/json" },
       });
+    }
+
+    // Support data URLs directly
+    if (src.startsWith("data:")) {
+      const match = /^data:([^;,]+)?(?:;charset=[^;,]+)?(;base64)?,(.*)$/i.exec(src);
+      if (!match) {
+        return new Response(JSON.stringify({ error: "Invalid data URL" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const mime = match[1] || "application/octet-stream";
+      const isBase64 = !!match[2];
+      const dataPart = match[3] || "";
+      const bytes = isBase64 ? Buffer.from(dataPart, "base64") : Buffer.from(decodeURIComponent(dataPart), "utf8");
+      const headers = new Headers({
+        "content-type": mime,
+        "content-disposition": `attachment; filename="${filename}"`,
+      });
+      return new Response(bytes, { status: 200, headers });
     }
 
     const upstream = await fetch(src);

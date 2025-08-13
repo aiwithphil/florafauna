@@ -135,7 +135,15 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
     // Imagen 4
     if (imgModel === "Imagen 4") {
       return [
-        { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "4:3", value: "4:3" },
+          { label: "16:9", value: "16:9" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "3:4", value: "3:4" },
+          { label: "9:16", value: "9:16" },
+        ] },
       ];
     }
 
@@ -243,9 +251,16 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       }
 
       const isFlux = imgModel.startsWith("Flux ");
-      const endpoint = isFlux ? "/api/generate-image/flux" : "/api/generate-image";
+      const isImagen = imgModel === "Imagen 4";
+      const endpoint = isFlux
+        ? "/api/generate-image/flux"
+        : isImagen
+        ? "/api/generate-image/imagen"
+        : "/api/generate-image";
       const body = isFlux
         ? { prompt, model: imgModel, ratio: imgRatio }
+        : isImagen
+        ? { prompt, ratio: imgRatio }
         : { prompt, size: mapRatioToGptSize(imgRatio) ?? "1024x1024" };
 
       const res = await fetch(endpoint, {
