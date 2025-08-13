@@ -13,6 +13,7 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
   const openMenu = (d as any)?._openMenu as ((nodeId: string, x: number, y: number) => void) | undefined;
   const selectNode = (d as any)?._select as ((nodeId: string) => void) | undefined;
   const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
+  const resolveContextImages = (d as any)?._resolveContextImages as ((nodeId: string) => string[]) | undefined;
   const initialPrompt = asString(d["prompt"], "Write a haiku about forests.");
   const initialOutput = asString(d["output"], "");
   const initialTextModel = asString(d["textModel"], "Gpt-4o Mini");
@@ -50,10 +51,11 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
     try {
       const context = resolveContextText?.(id) ?? "";
       const combined = context ? `${context}\n\n${prompt}` : prompt;
+      const images = resolveContextImages?.(id) ?? [];
       const res = await fetch("/api/generate-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: combined }),
+        body: JSON.stringify({ prompt: combined, images }),
       });
       const json = await res.json();
       const newOutput = json.text ?? "";
@@ -62,7 +64,7 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, id, update, resolveContextText]);
+  }, [prompt, id, update, resolveContextText, resolveContextImages]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
 

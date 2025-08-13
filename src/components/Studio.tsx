@@ -324,6 +324,19 @@ export function Studio() {
     return parts.join("\n\n");
   }, [edges, nodes]);
 
+  // Collect upstream image URLs for a given node (used by text blocks for multimodal context)
+  const resolveContextImages = useCallback((nodeId: string): string[] => {
+    const incoming = edges
+      .filter((e) => e.target === nodeId)
+      .map((e) => nodes.find((n) => n.id === e.source))
+      .filter(Boolean) as Node[];
+    const incomingImages = incoming.filter((n) => n.type === "imageGenerate");
+    const urls = incomingImages
+      .map((n) => (n.data as any)?.imageUrl)
+      .filter((u): u is string => typeof u === "string" && u.length > 0);
+    return urls;
+  }, [edges, nodes]);
+
   // Apply prompt locking to media nodes based on incoming text connection
   useEffect(() => {
     setNodes((prev) => {
@@ -410,6 +423,7 @@ export function Studio() {
               _openMenu: openNodeContextMenu,
               _select: selectNode,
                 _resolveContextText: resolveContextText,
+                _resolveContextImages: resolveContextImages,
             },
           })) as unknown as Node[]}
           edges={edges}

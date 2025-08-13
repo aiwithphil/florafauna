@@ -6,13 +6,14 @@ export const runtime = "nodejs";
 
 const bodySchema = z.object({
   prompt: z.string().min(1),
+  images: z.array(z.string()).optional().default([]),
   model: z.string().optional().default("gpt-4o-mini"),
 });
 
 export async function POST(req: NextRequest) {
   try {
     const json = await req.json();
-    const { prompt, model } = bodySchema.parse(json);
+    const { prompt, model, images } = bodySchema.parse(json);
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -24,9 +25,21 @@ export async function POST(req: NextRequest) {
 
     const client = new OpenAI({ apiKey });
 
+    const hasImages = Array.isArray(images) && images.length > 0;
+
     const response = await client.responses.create({
       model,
-      input: prompt,
+      input: hasImages
+        ? [
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: prompt },
+                ...images.map((url) => ({ type: "input_image", image_url: url as string })),
+              ],
+            },
+          ]
+        : prompt,
     });
 
     const text = response.output_text ?? "";
