@@ -29,7 +29,10 @@ function mapModelToPath(model: string): string {
     case "Flux Kontext Max":
       return "/flux-kontext-max";
     case "Flux Pro 1.1":
-      return "/flux-pro-1.1";
+      // Upgrade standard Pro 1.1 to Ultra endpoint
+      return "/flux-pro-1.1-ultra";
+    case "Flux Pro 1.1 Ultra":
+      return "/flux-pro-1.1-ultra";
     default:
       return "/flux-dev";
   }
@@ -81,7 +84,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { width, height } = dimsForRatio(ratio);
+    // Base dimensions
+    let { width, height } = dimsForRatio(ratio);
+
+    // For Flux Pro 1.1 / Ultra, target ~2x dimensions while respecting a ~4MP ceiling
+    // Reference: FLUX1.1 [pro] Ultra docs (up to 4MP) https://docs.bfl.ai/flux_models/flux_1_1_pro_ultra_raw
+    if (model === "Flux Pro 1.1" || model === "Flux Pro 1.1 Ultra") {
+      // Default: double both dimensions
+      let nextW = width * 2;
+      let nextH = height * 2;
+
+      // Cap to ~4MP where needed, preserving aspect and multiples of 64
+      // Pre-calculate known caps for ratios that would exceed 4MP when doubled
+      // 3:2 => 2304x1536 (≈3.54MP), 2:3 => 1536x2304 (≈3.54MP)
+      if (ratio === "3:2") {
+        nextW = 2304;
+        nextH = 1536;
+      } else if (ratio === "2:3") {
+        nextW = 1536;
+        nextH = 2304;
+      }
+
+      width = nextW;
+      height = nextH;
+    }
 
     const submitRes = await fetch(`${baseUrl}${path}`, {
       method: "POST",

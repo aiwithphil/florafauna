@@ -113,8 +113,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       ];
     }
 
-    // Flux Pro 1.1
-    if (imgModel === "Flux Pro 1.1") {
+    // Flux Pro 1.1 / Ultra
+    if (imgModel === "Flux Pro 1.1" || imgModel === "Flux Pro 1.1 Ultra") {
       return [
         { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
         { heading: "Horizontal", options: [
@@ -344,7 +344,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
                     "GPT Image",
                     "Flux Dev",
                     "Flux Kontext Max",
-                    "Flux Pro 1.1",
+                    "Flux Pro 1.1 Ultra",
                     "Imagen 4",
                     "Ideogram 3.0",
                   ].map((label) => (
