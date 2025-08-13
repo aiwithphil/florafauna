@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   ReactFlow,
@@ -39,6 +39,15 @@ export function Studio() {
   const [menuStage, setMenuStage] = useState<"primary" | "type">("type");
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
 
+  // Connect-drag ephemeral state
+  const connectStartRef = useRef<null | { nodeId: string; handleType: "source" | "target" }>(null);
+  const connectSucceededRef = useRef(false);
+  const [isConnectMenuOpen, setIsConnectMenuOpen] = useState(false);
+  const [connectMenuScreenPos, setConnectMenuScreenPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [showConnectOverlay, setShowConnectOverlay] = useState(false);
+  const [connectOverlayStart, setConnectOverlayStart] = useState<{ x: number; y: number } | null>(null);
+  const [connectOverlayEnd, setConnectOverlayEnd] = useState<{ x: number; y: number } | null>(null);
+
   // Node context menu state
   const [isNodeMenuOpen, setIsNodeMenuOpen] = useState(false);
   const [nodeMenuScreenPos, setNodeMenuScreenPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -58,8 +67,27 @@ export function Studio() {
   }, []);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
-    [setEdges]
+    (connection: Connection) => {
+      // Enforce: only a single text block can connect into an image/video as prompt source
+      const sourceNode = nodes.find((n) => n.id === connection.source);
+      const targetNode = nodes.find((n) => n.id === connection.target);
+      const isTextToMedia = (sourceNode?.type === "textGenerate") && (targetNode?.type === "imageGenerate" || targetNode?.type === "videoGenerate");
+      if (isTextToMedia) {
+        const alreadyHasText = edges.some((e) => e.target === connection.target && nodes.find((n) => n.id === e.source)?.type === "textGenerate");
+        if (alreadyHasText) {
+          // Disallow adding another text->media prompt link
+          return;
+        }
+      }
+      setEdges((eds) => addEdge(connection, eds));
+      connectSucceededRef.current = true;
+      // End any overlay/menu when a real connection is made
+      setShowConnectOverlay(false);
+      setIsConnectMenuOpen(false);
+      setConnectOverlayStart(null);
+      setConnectOverlayEnd(null);
+    },
+    [setEdges, nodes, edges]
   );
 
   const addNode = useCallback(
@@ -146,6 +174,9 @@ export function Studio() {
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    if (showConnectOverlay && !isConnectMenuOpen) {
+      setConnectOverlayEnd({ x: e.clientX, y: e.clientY });
+    }
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -253,6 +284,30 @@ export function Studio() {
     setIsMenuOpen(false);
   }, [addNode, menuScreenPos, getSpawnOffset]);
 
+  // Create block from connect-drop menu and wire edge according to drag direction
+  const createBlockFromConnect = useCallback((type: keyof typeof nodeTypes) => {
+    const inst = instanceRef.current;
+    const start = connectStartRef.current;
+    if (!inst || !start) return;
+    const { dx, dy } = getSpawnOffset();
+    const flowPos = inst.screenToFlowPosition({ x: connectMenuScreenPos.x, y: connectMenuScreenPos.y });
+    const newId = `${idRef.current++}`;
+    const newNode: Node = { id: newId, type, position: { x: flowPos.x + dx, y: flowPos.y + dy }, data: {} } as Node;
+    setNodes((nds) => nds.concat(newNode));
+    // Wire edge based on which handle we started from
+    setEdges((eds) => addEdge(
+      start.handleType === "source"
+        ? { id: `${start.nodeId}-${newId}`, source: start.nodeId, target: newId }
+        : { id: `${newId}-${start.nodeId}`, source: newId, target: start.nodeId },
+      eds
+    ));
+    setIsConnectMenuOpen(false);
+    connectStartRef.current = null;
+    setShowConnectOverlay(false);
+    setConnectOverlayStart(null);
+    setConnectOverlayEnd(null);
+  }, [getSpawnOffset, connectMenuScreenPos]);
+
   const pasteAtCanvasMenu = useCallback(() => {
     if (!nodeClipboard) return;
     pasteAtScreenPosition(menuScreenPos.x, menuScreenPos.y);
@@ -260,6 +315,44 @@ export function Studio() {
   }, [nodeClipboard, menuScreenPos, pasteAtScreenPosition]);
 
   const proOptions = useMemo(() => ({ hideAttribution: true }), []);
+
+  // Context resolver for text nodes: combine incoming text prompts in order of edges
+  const resolveContextText = useCallback((nodeId: string): string => {
+    const incoming = edges.filter((e) => e.target === nodeId).map((e) => nodes.find((n) => n.id === e.source)).filter(Boolean) as Node[];
+    const incomingText = incoming.filter((n) => n.type === "textGenerate");
+    const parts = incomingText.map((n) => (n.data as any)?.output).filter((p): p is string => typeof p === "string" && p.length > 0);
+    return parts.join("\n\n");
+  }, [edges, nodes]);
+
+  // Apply prompt locking to media nodes based on incoming text connection
+  useEffect(() => {
+    setNodes((prev) => {
+      let changed = false;
+      const next = prev.map((node) => {
+        if (node.type !== "imageGenerate" && node.type !== "videoGenerate") return node;
+        const incomingTextEdges = edges.filter((e) => e.target === node.id && nodes.find((n) => n.id === e.source)?.type === "textGenerate");
+        const existingLocked = Boolean((node.data as any)?.promptLocked);
+        if (incomingTextEdges.length === 0) {
+          if (existingLocked) {
+            changed = true;
+            return { ...node, data: { ...(node.data as any), promptLocked: false, promptLockedSourceId: "" } } as Node;
+          }
+          return node;
+        }
+        // There is at least one text source. Use the first one.
+        const srcId = incomingTextEdges[0].source!;
+        const srcNode = nodes.find((n) => n.id === srcId);
+        const srcOutput = (srcNode?.data as any)?.output ?? "";
+        const currentPrompt = (node.data as any)?.prompt;
+        if (!existingLocked || currentPrompt !== srcOutput || (node.data as any)?.promptLockedSourceId !== srcId) {
+          changed = true;
+          return { ...node, data: { ...(node.data as any), prompt: srcOutput, promptLocked: true, promptLockedSourceId: srcId } } as Node;
+        }
+        return node;
+      });
+      return changed ? next : prev;
+    });
+  }, [edges, nodes, setNodes]);
 
   return (
     <div className="w-full h-[calc(100vh-64px)] grid grid-cols-[280px_1fr]">
@@ -316,12 +409,35 @@ export function Studio() {
               _update: updateNodeData,
               _openMenu: openNodeContextMenu,
               _select: selectNode,
+                _resolveContextText: resolveContextText,
             },
           })) as unknown as Node[]}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+            onConnectStart={(event, params) => {
+              connectSucceededRef.current = false;
+              connectStartRef.current = { nodeId: params?.nodeId ?? "", handleType: (params?.handleType as any) ?? "source" };
+              const mouseEvent = event as MouseEvent;
+              const sx = mouseEvent.clientX;
+              const sy = mouseEvent.clientY;
+              setConnectOverlayStart({ x: sx, y: sy });
+              setConnectOverlayEnd(lastPointerRef.current ?? { x: sx, y: sy });
+              setShowConnectOverlay(true);
+            }}
+            onConnectEnd={(e) => {
+              // If we didn't connect to a node, open TURN INTO menu where the drag ended
+              if (!connectSucceededRef.current) {
+                const mouseEvent = e as MouseEvent;
+                setConnectMenuScreenPos({ x: mouseEvent.clientX, y: mouseEvent.clientY });
+                // keep overlay visible while menu is open
+                setShowConnectOverlay(true);
+                setIsConnectMenuOpen(true);
+                setConnectOverlayEnd({ x: mouseEvent.clientX, y: mouseEvent.clientY });
+              }
+              connectSucceededRef.current = false;
+            }}
           nodeTypes={nodeTypes}
           proOptions={proOptions}
           zoomOnDoubleClick={false}
@@ -385,6 +501,50 @@ export function Studio() {
         ) : null}
         {isMenuOpen ? (
           <div className="absolute inset-0" onClick={closeMenu} />
+        ) : null}
+
+        {/* Lightweight overlay line to keep the thread visible while TURN INTO is open */}
+        {showConnectOverlay ? (
+          <svg className="pointer-events-none absolute inset-0 z-40" style={{ left: 0, top: 0 }}>
+            {(() => {
+              const start = connectOverlayStart;
+              const end = connectOverlayEnd;
+              const wrapRect = wrapperRef.current?.getBoundingClientRect();
+              if (!start || !end || !wrapRect) return null;
+              const sx = start.x - wrapRect.left;
+              const sy = start.y - wrapRect.top;
+              const ex = end.x - wrapRect.left;
+              const ey = end.y - wrapRect.top;
+              return (
+                <line x1={sx} y1={sy} x2={ex} y2={ey} stroke="currentColor" opacity="0.4" strokeWidth="2" />
+              );
+            })()}
+          </svg>
+        ) : null}
+
+        {isConnectMenuOpen ? (
+          <div
+            className="absolute z-50 bg-background border rounded-md shadow-lg overflow-hidden"
+            style={{
+              left: connectMenuScreenPos.x - (wrapperRef.current?.getBoundingClientRect().left ?? 0),
+              top: connectMenuScreenPos.y - (wrapperRef.current?.getBoundingClientRect().top ?? 0),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-[11px] px-3 py-2 border-b text-foreground/60 tracking-wide">TURN INTO</div>
+            <button className="block w-full text-left px-3 py-2 text-sm hover:bg-foreground/10" onClick={() => createBlockFromConnect("textGenerate")}>
+              Text
+            </button>
+            <button className="block w-full text-left px-3 py-2 text-sm hover:bg-foreground/10" onClick={() => createBlockFromConnect("imageGenerate")}>
+              Image
+            </button>
+            <button className="block w-full text-left px-3 py-2 text-sm hover:bg-foreground/10" onClick={() => createBlockFromConnect("videoGenerate")}>
+              Video
+            </button>
+          </div>
+        ) : null}
+        {isConnectMenuOpen ? (
+          <div className="absolute inset-0" onClick={() => { setIsConnectMenuOpen(false); connectStartRef.current = null; setShowConnectOverlay(false); setConnectOverlayStart(null); setConnectOverlayEnd(null); }} />
         ) : null}
 
         {isNodeMenuOpen && nodeMenuTargetId ? (

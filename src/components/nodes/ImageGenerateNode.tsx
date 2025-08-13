@@ -12,11 +12,13 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const update = (d as any)?._update as ((nodeId: string, partial: Record<string, unknown>) => void) | undefined;
   const openMenu = (d as any)?._openMenu as ((nodeId: string, x: number, y: number) => void) | undefined;
   const selectNode = (d as any)?._select as ((nodeId: string) => void) | undefined;
+  const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
   const initialPrompt = asString(d["prompt"], "A watercolor painting of a fern in a misty forest");
   const initialImgRatio = asString(d["imgRatio"], "1:1");
   const initialImgModel = asString(d["imgModel"], "GPT Image");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [imageUrl, setImageUrl] = useState<string | null>((typeof d["imageUrl"] === "string" ? (d["imageUrl"] as string) : null));
+  const promptLocked = Boolean((d as any)?.promptLocked);
   const [isLoading, setIsLoading] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isToolbarHover, setIsToolbarHover] = useState(false);
@@ -25,6 +27,14 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [imgModel, setImgModel] = useState(initialImgModel);
   const [openWhich, setOpenWhich] = useState<null | "ratio" | "model">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
+
+  // Sync local prompt view when locked and upstream text output updates
+  useEffect(() => {
+    const dataPrompt = asString(d["prompt"], prompt);
+    if (promptLocked && dataPrompt !== prompt) {
+      setPrompt(dataPrompt);
+    }
+  }, [promptLocked, d, prompt]);
 
   type SizeOption = { label: string; value: string };
   type SizeGroup = { heading: string; options: SizeOption[] };
@@ -235,6 +245,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const run = useCallback(async () => {
     setIsLoading(true);
     try {
+      const context = resolveContextText?.(id) ?? "";
+      const effectivePrompt = promptLocked ? prompt : (context ? `${context}\n\n${prompt}` : prompt);
       function mapRatioToGptSize(ratio: string): string | undefined {
         switch (ratio) {
           case "auto":
@@ -261,12 +273,12 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         ? "/api/generate-image/ideogram"
         : "/api/generate-image";
       const body = isFlux
-        ? { prompt, model: imgModel, ratio: imgRatio }
+        ? { prompt: effectivePrompt, model: imgModel, ratio: imgRatio }
         : isImagen
-        ? { prompt, ratio: imgRatio }
+        ? { prompt: effectivePrompt, ratio: imgRatio }
         : isIdeogram
-        ? { prompt, ratio: imgRatio }
-        : { prompt, size: mapRatioToGptSize(imgRatio) ?? "1024x1024" };
+        ? { prompt: effectivePrompt, ratio: imgRatio }
+        : { prompt: effectivePrompt, size: mapRatioToGptSize(imgRatio) ?? "1024x1024" };
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -285,7 +297,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, imgRatio, imgModel, id, update]);
+  }, [prompt, imgRatio, imgModel, id, update, promptLocked, resolveContextText]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
 
@@ -408,16 +420,18 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       )}
       <div className="px-3 py-2 border-b text-sm font-semibold">Image Generate</div>
       <div className="p-3 space-y-2">
-        <label className="text-xs font-medium">Prompt</label>
+        <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}</label>
         <textarea
           value={prompt}
           onChange={(e) => {
+            if (promptLocked) return;
             const v = e.target.value;
             setPrompt(v);
             update?.(id, { prompt: v });
           }}
           className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
           placeholder="Enter prompt"
+          readOnly={promptLocked}
           draggable={false}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerMove={(e) => e.stopPropagation()}
@@ -459,8 +473,11 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
           </div>
         </div>
       </div>
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      {/* Visible plus handles */}
+      <Handle type="target" position={Position.Left} className="!w-9 !h-9 !bg-background !border !border-foreground/30 !shadow absolute" style={{ left: -22, top: "50%", transform: "translate(-50%, -50%)" }} />
+      <div className="pointer-events-none absolute text-foreground/80" style={{ left: -22, top: "50%", transform: "translate(-50%, -50%)" }}>+</div>
+      <Handle type="source" position={Position.Right} className="!w-9 !h-9 !bg-background !border !border-foreground/30 !shadow absolute" style={{ right: -22, top: "50%", transform: "translate(50%, -50%)" }} />
+      <div className="pointer-events-none absolute text-foreground/80" style={{ right: -22, top: "50%", transform: "translate(50%, -50%)" }}>+</div>
     </div>
   );
 }

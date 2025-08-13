@@ -12,11 +12,13 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const update = (d as any)?._update as ((nodeId: string, partial: Record<string, unknown>) => void) | undefined;
   const openMenu = (d as any)?._openMenu as ((nodeId: string, x: number, y: number) => void) | undefined;
   const selectNode = (d as any)?._select as ((nodeId: string) => void) | undefined;
+  const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
   const initialPrompt = asString(d["prompt"], "A short looping animation of leaves swaying in the wind");
   const initialVidRatio = asString(d["vidRatio"], "16:9");
   const initialVidModel = asString(d["vidModel"], "Kling 1.6");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [videoUrl, setVideoUrl] = useState<string | null>((typeof d["videoUrl"] === "string" ? (d["videoUrl"] as string) : null));
+  const promptLocked = Boolean((d as any)?.promptLocked);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isHovered, setIsHovered] = useState(false);
@@ -38,6 +40,14 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         return value;
     }
   };
+
+  // Sync local prompt when controlled by linked text output
+  useEffect(() => {
+    const dataPrompt = asString(d["prompt"], prompt);
+    if (promptLocked && dataPrompt !== prompt) {
+      setPrompt(dataPrompt);
+    }
+  }, [promptLocked, d, prompt]);
 
   useEffect(() => {
     update?.(id, { prompt: initialPrompt, videoUrl: videoUrl ?? "", vidRatio: initialVidRatio, vidModel: initialVidModel });
@@ -66,10 +76,12 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const run = useCallback(async () => {
     setIsLoading(true);
     try {
+      const context = resolveContextText?.(id) ?? "";
+      const effectivePrompt = promptLocked ? prompt : (context ? `${context}\n\n${prompt}` : prompt);
       const res = await fetch("/api/generate-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, duration: 5, ratio: "1280:720" }),
+        body: JSON.stringify({ prompt: effectivePrompt, duration: 5, ratio: "1280:720" }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -84,7 +96,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, id, update]);
+  }, [prompt, id, update, promptLocked, resolveContextText]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
 
@@ -208,16 +220,18 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       )}
       <div className="px-3 py-2 border-b text-sm font-semibold">Video Generate</div>
       <div className="p-3 space-y-2">
-        <label className="text-xs font-medium">Prompt</label>
+        <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}</label>
         <textarea
           value={prompt}
           onChange={(e) => {
+            if (promptLocked) return;
             const v = e.target.value;
             setPrompt(v);
             update?.(id, { prompt: v });
           }}
           className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
           placeholder="Enter prompt"
+          readOnly={promptLocked}
           draggable={false}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerMove={(e) => e.stopPropagation()}
@@ -252,8 +266,11 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           </div>
         </div>
       </div>
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      {/* Visible plus handles */}
+      <Handle type="target" position={Position.Left} className="!w-9 !h-9 !bg-background !border !border-foreground/30 !shadow absolute" style={{ left: -22, top: "50%", transform: "translate(-50%, -50%)" }} />
+      <div className="pointer-events-none absolute text-foreground/80" style={{ left: -22, top: "50%", transform: "translate(-50%, -50%)" }}>+</div>
+      <Handle type="source" position={Position.Right} className="!w-9 !h-9 !bg-background !border !border-foreground/30 !shadow absolute" style={{ right: -22, top: "50%", transform: "translate(50%, -50%)" }} />
+      <div className="pointer-events-none absolute text-foreground/80" style={{ right: -22, top: "50%", transform: "translate(50%, -50%)" }}>+</div>
     </div>
   );
 }

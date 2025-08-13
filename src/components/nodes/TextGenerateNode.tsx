@@ -12,6 +12,7 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
   const update = (d as any)?._update as ((nodeId: string, partial: Record<string, unknown>) => void) | undefined;
   const openMenu = (d as any)?._openMenu as ((nodeId: string, x: number, y: number) => void) | undefined;
   const selectNode = (d as any)?._select as ((nodeId: string) => void) | undefined;
+  const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
   const initialPrompt = asString(d["prompt"], "Write a haiku about forests.");
   const initialOutput = asString(d["output"], "");
   const initialTextModel = asString(d["textModel"], "Gpt-4o Mini");
@@ -47,10 +48,12 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
   const run = useCallback(async () => {
     setIsLoading(true);
     try {
+      const context = resolveContextText?.(id) ?? "";
+      const combined = context ? `${context}\n\n${prompt}` : prompt;
       const res = await fetch("/api/generate-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: combined }),
       });
       const json = await res.json();
       const newOutput = json.text ?? "";
@@ -59,7 +62,7 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, id, update]);
+  }, [prompt, id, update, resolveContextText]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
 
@@ -172,14 +175,33 @@ export function TextGenerateNode({ id, data, selected }: NodeProps) {
         <div className="space-y-1">
           <label className="text-xs font-medium">Output</label>
           <textarea
-            readOnly
             value={output}
-            className="w-full h-28 p-2 text-sm rounded border bg-transparent"
+            onChange={(e) => {
+              const v = e.target.value;
+              setOutput(v);
+              update?.(id, { output: v });
+            }}
+            className="w-full h-28 p-2 text-sm rounded border bg-transparent nodrag"
+            placeholder="Model output (editable)"
+            draggable={false}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseMove={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+            onDragStart={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
           />
         </div>
       </div>
-      <Handle type="source" position={Position.Right} />
-      <Handle type="target" position={Position.Left} />
+      {/* Visible connect "+" handles */}
+      <Handle type="target" position={Position.Left} className="!w-9 !h-9 !bg-background !border !border-foreground/30 !shadow absolute" style={{ left: -22, top: "50%", transform: "translate(-50%, -50%)" }} />
+      <div className="pointer-events-none absolute text-foreground/80" style={{ left: -22, top: "50%", transform: "translate(-50%, -50%)" }}>+</div>
+      <Handle type="source" position={Position.Right} className="!w-9 !h-9 !bg-background !border !border-foreground/30 !shadow absolute" style={{ right: -22, top: "50%", transform: "translate(50%, -50%)" }} />
+      <div className="pointer-events-none absolute text-foreground/80" style={{ right: -22, top: "50%", transform: "translate(50%, -50%)" }}>+</div>
     </div>
   );
 }
