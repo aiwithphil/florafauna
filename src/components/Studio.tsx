@@ -209,27 +209,14 @@ export function Studio() {
   }, [setNodes, setEdges]);
 
   const downloadMedia = useCallback(async (url: string, filename: string) => {
-    try {
-      // Try to fetch and download as blob for cross-origin robustness
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(objectUrl);
-    } catch {
-      // Fallback: direct download attempt
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
+    // Use server-side proxy to avoid CORS and force attachment
+    const proxyUrl = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
+    const a = document.createElement("a");
+    a.href = proxyUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }, []);
 
   // Paste helper at exact screen coordinates
