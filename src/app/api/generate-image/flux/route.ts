@@ -4,6 +4,8 @@ import { z } from "zod";
 export const runtime = "nodejs";
 
 const AllowedRatios = [
+  // Allow "auto" specifically for i2i (e.g., Flux Kontext Max)
+  "auto",
   "1:1",
   "21:9",
   "16:9",
@@ -19,6 +21,8 @@ const bodySchema = z.object({
   prompt: z.string().min(1),
   model: z.string().optional().default("Flux Dev"),
   ratio: z.enum(AllowedRatios).default("1:1"),
+  // Optional input/reference images for image-to-image workflows
+  images: z.array(z.string().min(1)).max(10).optional().default([]),
 });
 
 function mapModelToPath(model: string): string {
@@ -41,7 +45,7 @@ function mapModelToPath(model: string): string {
 export async function POST(req: NextRequest) {
   try {
     const json = await req.json();
-    const { prompt, model, ratio } = bodySchema.parse(json);
+    const { prompt, model, ratio, images } = bodySchema.parse(json);
 
     const apiKey = process.env.BFL_API_KEY;
     if (!apiKey) {
@@ -56,6 +60,9 @@ export async function POST(req: NextRequest) {
 
     function dimsForRatio(r: typeof AllowedRatios[number]): { width: number; height: number } {
       switch (r) {
+        case "auto":
+          // Placeholder; caller should omit width/height when auto
+          return { width: 1024, height: 1024 };
         case "1:1":
           return { width: 1024, height: 1024 };
         case "21:9":
@@ -84,11 +91,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Base dimensions
+    // Base dimensions (not used if ratio === "auto")
     let { width, height } = dimsForRatio(ratio);
 
     // Override sizes ONLY for Flux Dev per requested mappings
-    if (model === "Flux Dev") {
+    if (model === "Flux Dev" && ratio !== "auto") {
       switch (ratio) {
         case "1:1":
           width = 1440;
@@ -118,7 +125,7 @@ export async function POST(req: NextRequest) {
 
     // For Flux Pro 1.1 / Ultra, target ~2x dimensions while respecting a ~4MP ceiling
     // Reference: FLUX1.1 [pro] Ultra docs (up to 4MP) https://docs.bfl.ai/flux_models/flux_1_1_pro_ultra_raw
-    if (model === "Flux Pro 1.1" || model === "Flux Pro 1.1 Ultra") {
+    if ((model === "Flux Pro 1.1" || model === "Flux Pro 1.1 Ultra") && ratio !== "auto") {
       // Default: double both dimensions
       let nextW = width * 2;
       let nextH = height * 2;
@@ -138,6 +145,72 @@ export async function POST(req: NextRequest) {
       height = nextH;
     }
 
+    // Build request body
+    type FluxPayload = {
+      prompt: string;
+      aspect_ratio?: string;
+      width?: number;
+      height?: number;
+      image_url?: string;
+      image_urls?: string[];
+      // Kontext i2i specific
+      input_image?: string; // base64-encoded image bytes (no data URL prefix)
+      resolution_mode?: "auto" | "match_input";
+    };
+    const payload: FluxPayload = { prompt };
+
+    // Helper to turn URL or data URL into base64 string
+    async function toBase64FromUrlOrDataUrl(input: string): Promise<{ b64: string; mime: string }> {
+      if (input.startsWith("data:")) {
+        const match = input.match(/^data:([^;]+);base64,(.*)$/);
+        if (!match) throw new Error("Invalid data URL format for input image");
+        return { mime: match[1], b64: match[2] };
+      }
+      const res = await fetch(input);
+      if (!res.ok) throw new Error(`Failed to fetch input image: ${res.status}`);
+      const ab = await res.arrayBuffer();
+      const mime = res.headers.get("content-type") || "application/octet-stream";
+      const b64 = Buffer.from(ab).toString("base64");
+      return { b64, mime };
+    }
+
+    const isKontext = model === "Flux Kontext Max";
+    const hasI2I = Array.isArray(images) && images.length > 0;
+
+    if (hasI2I && isKontext) {
+      // For Kontext i2i, send base64 input_image
+      const { b64 } = await toBase64FromUrlOrDataUrl(images[0]);
+      payload.input_image = b64;
+      if (ratio === "auto") {
+        // Follow the source dimensions
+        payload.resolution_mode = "match_input";
+      } else {
+        // Respect user's chosen size: switch to auto resolution and provide aspect/dims
+        payload.resolution_mode = "auto";
+        payload.aspect_ratio = ratio;
+        // Provide concrete dims as a hint if supported
+        const dims = dimsForRatio(ratio);
+        payload.width = dims.width;
+        payload.height = dims.height;
+      }
+    } else {
+      // Standard t2i flow (and non-Kontext models)
+      if (ratio !== "auto") {
+        Object.assign(payload, {
+          aspect_ratio: ratio,
+          width,
+          height,
+        });
+      }
+      if (hasI2I) {
+        if (images.length === 1) {
+          payload.image_url = images[0];
+        } else {
+          payload.image_urls = images.slice(0, 10);
+        }
+      }
+    }
+
     const submitRes = await fetch(`${baseUrl}${path}`, {
       method: "POST",
       headers: {
@@ -145,12 +218,7 @@ export async function POST(req: NextRequest) {
         "content-type": "application/json",
         "x-key": apiKey,
       },
-      body: JSON.stringify({
-        prompt,
-        aspect_ratio: ratio,
-        width,
-        height,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!submitRes.ok) {
@@ -178,7 +246,6 @@ export async function POST(req: NextRequest) {
     const startedAt = Date.now();
     const timeoutMs = 90_000; // 90s max
     let lastStatus = "";
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (Date.now() - startedAt > timeoutMs) {
         return NextResponse.json(

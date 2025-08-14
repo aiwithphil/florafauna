@@ -439,7 +439,12 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         : "/api/generate-image";
       const upstreamImages = resolveContextImages?.(id) ?? [];
       const body = isFlux
-        ? { prompt: effectivePrompt, model: imgModel, ratio: imgRatioSelected }
+        ? {
+            prompt: effectivePrompt,
+            model: imgModel,
+            ratio: imgRatioSelected,
+            ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
+          }
         : isImagen
         ? { prompt: effectivePrompt, ratio: imgRatioSelected }
         : isIdeogram
