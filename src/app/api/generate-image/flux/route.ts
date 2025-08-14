@@ -18,7 +18,8 @@ const AllowedRatios = [
 ] as const;
 
 const bodySchema = z.object({
-  prompt: z.string().min(1),
+  // Allow empty prompt for i2i
+  prompt: z.string().optional().default(""),
   model: z.string().optional().default("Flux Dev"),
   ratio: z.enum(AllowedRatios).default("1:1"),
   // Optional input/reference images for image-to-image workflows
@@ -157,7 +158,9 @@ export async function POST(req: NextRequest) {
       input_image?: string; // base64-encoded image bytes (no data URL prefix)
       resolution_mode?: "auto" | "match_input";
     };
-    const payload: FluxPayload = { prompt };
+    // Some Flux endpoints may accept empty prompt with i2i; use single space when empty to be safe for i2i
+    const safePrompt = (prompt && prompt.trim().length > 0) ? prompt : " ";
+    const payload: FluxPayload = { prompt: safePrompt };
 
     // Helper to turn URL or data URL into base64 string
     async function toBase64FromUrlOrDataUrl(input: string): Promise<{ b64: string; mime: string }> {
@@ -209,6 +212,14 @@ export async function POST(req: NextRequest) {
           payload.image_urls = images.slice(0, 10);
         }
       }
+    }
+
+    // If no images were provided (pure t2i), require non-empty prompt
+    if (!hasI2I && (!prompt || prompt.trim().length === 0)) {
+      return NextResponse.json(
+        { error: "Prompt is required when no input images are provided" },
+        { status: 400 }
+      );
     }
 
     const submitRes = await fetch(`${baseUrl}${path}`, {

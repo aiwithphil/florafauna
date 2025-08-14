@@ -14,7 +14,8 @@ const AllowedSizes = [
 type AllowedSize = (typeof AllowedSizes)[number];
 
 const bodySchema = z.object({
-  prompt: z.string().min(1),
+  // Allow empty prompt for image-to-image flows
+  prompt: z.string().optional().default(""),
   size: z.enum(AllowedSizes).optional().default("1024x1024"),
   // Optional array of image URLs or data URLs for image-to-image/reference guidance
   images: z.array(z.string().min(1)).max(10).optional().default([]),
@@ -59,7 +60,9 @@ export async function POST(req: NextRequest) {
 
       const form = new FormData();
       form.set("model", "gpt-image-1");
-      form.set("prompt", prompt);
+      // Some providers require a non-empty prompt even for i2i; use a single space when empty
+      const safePrompt = (prompt && prompt.trim().length > 0) ? prompt : " ";
+      form.set("prompt", safePrompt);
       if (size && size !== "auto") form.set("size", size as string);
       // Attach up to 10 images as image[] entries
       const limited = images.slice(0, 10);
@@ -100,6 +103,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Otherwise, standard text-to-image generation
+    // Require a non-empty prompt for pure text-to-image
+    if (!prompt || prompt.trim().length === 0) {
+      return NextResponse.json({ error: "Prompt is required when no input images are provided" }, { status: 400 });
+    }
     const client = new OpenAI({ apiKey });
     const result = await client.images.generate({
       model: "gpt-image-1",

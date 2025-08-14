@@ -21,7 +21,8 @@ const AllowedRatios = [
 const AllowedSpeeds = ["DEFAULT", "TURBO"] as const;
 
 const bodySchema = z.object({
-  prompt: z.string().min(1),
+  // Allow empty prompt for character reference i2i
+  prompt: z.string().optional().default(""),
   ratio: z.enum(AllowedRatios).optional().default("1:1"),
   // Up to 2 character reference images (URL or data URL)
   characterImages: z.array(z.string().min(1)).max(2).optional().default([]),
@@ -64,7 +65,9 @@ export async function POST(req: NextRequest) {
 
     const toIdeogramAspect = (r: typeof AllowedRatios[number]): string => r.replace(":", "x");
     const formData = new FormData();
-    formData.set("prompt", prompt);
+    // Use a single space as safe fallback when prompt is empty for i2i
+    const safePrompt = (prompt && prompt.trim().length > 0) ? prompt : " ";
+    formData.set("prompt", safePrompt);
     // Only set aspect_ratio if not auto, otherwise let the provider choose
     if (ratio !== "auto") {
       formData.set("aspect_ratio", toIdeogramAspect(ratio));
@@ -86,6 +89,14 @@ export async function POST(req: NextRequest) {
           : "bin";
         formData.append("character_reference_images", blob, `character_${index++}.${ext}`);
       }
+    }
+
+    // If no character images (pure t2i), require non-empty prompt
+    if ((!characterImages || characterImages.length === 0) && (!prompt || prompt.trim().length === 0)) {
+      return NextResponse.json(
+        { error: "Prompt is required when no character images are provided" },
+        { status: 400 }
+      );
     }
 
     const res = await fetch("https://api.ideogram.ai/v1/ideogram-v3/generate", {

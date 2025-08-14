@@ -62,7 +62,8 @@ function mapAspectToRunway(ratio: AllowedRatio): TIAllowedRatio {
 }
 
 const bodySchema = z.object({
-  prompt: z.string().min(1),
+  // Allow empty prompt for i2i reference mode
+  prompt: z.string().optional().default(""),
   ratio: z.enum(AllowedRatios).optional().default("auto"),
   // Up to 3 reference images (URLs or data URIs)
   images: z.array(z.string().min(1)).max(3).optional().default([]),
@@ -81,7 +82,10 @@ export async function POST(req: NextRequest) {
     const { prompt, ratio, images } = bodySchema.parse(json);
 
     if (!images || images.length === 0) {
-      return NextResponse.json({ error: "At least one reference image is required" }, { status: 400 });
+      // No references → require prompt for t2i (even though endpoint uses textToImage API, we enforce UX contract)
+      if (!prompt || prompt.trim().length === 0) {
+        return NextResponse.json({ error: "Prompt is required when no reference images are provided" }, { status: 400 });
+      }
     }
 
     const client: RunwayClient = new RunwayML({ apiKey });
@@ -91,7 +95,8 @@ export async function POST(req: NextRequest) {
     const task = await client.textToImage
       .create({
         model: "gen4_image_turbo",
-        promptText: prompt,
+        // Use safe prompt: single space allowed when i2i only
+        promptText: (prompt && prompt.trim().length > 0) ? prompt : " ",
         ratio: mapAspectToRunway(ratio as AllowedRatio),
         referenceImages,
       })

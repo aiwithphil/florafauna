@@ -12,7 +12,8 @@ const AllowedRatios = [
 ] as const;
 
 const bodySchema = z.object({
-  prompt: z.string().min(1),
+  // Allow empty prompt for potential future i2i; enforce for t2i below
+  prompt: z.string().optional().default(""),
   ratio: z.enum(AllowedRatios).optional().default("1:1"),
 });
 
@@ -31,6 +32,11 @@ export async function POST(req: NextRequest) {
 
     const url =
       "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-preview-06-06:predict";
+
+    // For Imagen, currently no i2i in this route; require non-empty prompt
+    if (!prompt || prompt.trim().length === 0) {
+      return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
+    }
 
     const payload = {
       instances: [
