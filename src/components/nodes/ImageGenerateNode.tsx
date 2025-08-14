@@ -32,10 +32,11 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [imgRatioSelected, setImgRatioSelected] = useState(initialImgRatio);
   const [imgRatioApplied, setImgRatioApplied] = useState(initialImgRatioApplied);
   const [imgModel, setImgModel] = useState(initialImgModel);
-  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model">(null);
+  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "scale">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const isImageToImage = Boolean(hasIncomingImageSource?.(id));
   const incomingImageCount = countIncomingImages?.(id) ?? 0;
+  const [topazScale, setTopazScale] = useState<string>(asString((d as any)?.topazScale, "2"));
 
   const textToImageModels = React.useMemo(
     () => [
@@ -380,6 +381,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       imgRatioSelected: imgRatioSelected,
       imgRatioApplied: imgRatioApplied,
       imgModel: initialImgModel,
+      topazScale,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -402,6 +404,29 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       setOpenWhich(null);
     }
   }, [selected]);
+
+  async function getImageNaturalSize(src: string): Promise<{ width: number; height: number } | null> {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return await new Promise((resolve) => {
+        const img = new Image();
+        // Use same-origin proxy to avoid CORS errors when probing dimensions
+        let url = src;
+        try {
+          const isData = src.startsWith("data:");
+          const isHttp = src.startsWith("http://") || src.startsWith("https://");
+          if (!isData && isHttp) {
+            url = `/api/download?url=${encodeURIComponent(src)}&filename=probe.jpg`;
+          }
+        } catch {}
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => resolve(null);
+        img.src = url;
+      });
+    } catch {
+      return null;
+    }
+  }
 
   const run = useCallback(async () => {
     setIsLoading(true);
@@ -431,6 +456,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       const isImagen = imgModel.startsWith("Imagen ");
       const isIdeogram = imgModel.startsWith("Ideogram");
       const isRunway = imgModel === "Runway References";
+      const isTopaz = imgModel === "Topaz";
       const endpoint = isFlux
         ? "/api/generate-image/flux"
         : isImagen
@@ -439,41 +465,63 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         ? "/api/generate-image/ideogram"
         : isRunway
         ? "/api/generate-image/runway"
+        : isTopaz
+        ? "/api/generate-image/topaz"
         : "/api/generate-image";
       const upstreamImages = resolveContextImages?.(id) ?? [];
-      const body = isFlux
-        ? {
-            prompt: effectivePrompt,
-            model: imgModel,
-            ratio: imgRatioSelected,
-            ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
-          }
-        : isImagen
-        ? { prompt: effectivePrompt, ratio: imgRatioSelected }
-        : isIdeogram
-        ? {
-            prompt: effectivePrompt,
-            ratio: imgRatioSelected,
-            ...(isImageToImage && upstreamImages.length > 0
-              ? { characterImages: upstreamImages.slice(0, 2) }
-              : {}),
-          }
-        : isRunway
-        ? {
-            prompt: effectivePrompt,
-            ratio: imgRatioSelected,
-            ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 3) } : {}),
-          }
-        : {
-            prompt: effectivePrompt,
-            size: mapRatioToGptSize(imgRatioSelected) ?? "1024x1024",
-            ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
-          };
+      let payload: any;
+      if (isTopaz) {
+        const image = upstreamImages[0] || imageUrl;
+        if (!image) {
+          // No input to upscale; abort gracefully
+          setIsLoading(false);
+          return;
+        }
+        const dims = await getImageNaturalSize(image);
+        const s = Number(topazScale) || 2;
+        payload = dims
+          ? {
+              image,
+              scale: String(s),
+              output_width: Math.max(1, Math.round(dims.width * s)),
+              output_height: Math.max(1, Math.round(dims.height * s)),
+            }
+          : { image, scale: String(s) };
+      } else if (isFlux) {
+        payload = {
+          prompt: effectivePrompt,
+          model: imgModel,
+          ratio: imgRatioSelected,
+          ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
+        };
+      } else if (isImagen) {
+        payload = { prompt: effectivePrompt, ratio: imgRatioSelected };
+      } else if (isIdeogram) {
+        payload = {
+          prompt: effectivePrompt,
+          ratio: imgRatioSelected,
+          ...(isImageToImage && upstreamImages.length > 0
+            ? { characterImages: upstreamImages.slice(0, 2) }
+            : {}),
+        };
+      } else if (isRunway) {
+        payload = {
+          prompt: effectivePrompt,
+          ratio: imgRatioSelected,
+          ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 3) } : {}),
+        };
+      } else {
+        payload = {
+          prompt: effectivePrompt,
+          size: mapRatioToGptSize(imgRatioSelected) ?? "1024x1024",
+          ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
+        };
+      }
 
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (json.url) {
@@ -519,8 +567,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       {showToolbar && (
         <div className="absolute -top-16 left-1/2 -translate-x-1/2 z-10" onMouseEnter={() => setIsToolbarHover(true)} onMouseLeave={() => setIsToolbarHover(false)} onMouseDown={(e) => { setIsToolbarHover(true); e.stopPropagation(); }} onClick={(e) => e.stopPropagation()}>
           <div ref={toolbarRef} className={`relative flex items-center gap-2 rounded-md border bg-background shadow-sm px-3 py-1.5 font-semibold ${selected || isToolbarHover || openWhich ? "opacity-100" : "opacity-70"}`}>
-            {/* Ratio */}
-            {sizeGroups.length > 0 ? (
+            {/* Ratio (hidden for Topaz) */}
+            {imgModel !== "Topaz" && sizeGroups.length > 0 ? (
               <div className="relative group">
                 <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
                   <span>{imgRatioSelected === "auto" ? "Auto" : imgRatioSelected}</span>
@@ -554,6 +602,37 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
                           </button>
                         ))}
                       </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Topaz Scale */}
+            {imgModel === "Topaz" ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "scale" ? null : "scale")); }}>
+                  <span>{topazScale}x</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Scale</div>
+                {openWhich === "scale" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {["2", "3", "4"].map((s) => (
+                      <button
+                        key={s}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          setTopazScale(s);
+                          update?.(id, { topazScale: s });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span>{s}x</span>
+                        <span className="text-xs">{topazScale === s ? "✓" : ""}</span>
+                      </button>
                     ))}
                   </div>
                 ) : null}
@@ -636,31 +715,35 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       )}
       <div className="px-3 py-2 border-b text-sm font-semibold">Image Generate</div>
       <div className="p-3 space-y-2">
-        <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}{promptLockedByModel ? <span className="text-[10px] ml-1 text-foreground/60">(disabled for this model)</span> : null}</label>
-        <textarea
-          value={prompt}
-          onChange={(e) => {
-            if (isPromptReadOnly) return;
-            const v = e.target.value;
-            setPrompt(v);
-            update?.(id, { prompt: v });
-          }}
-          className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
-          placeholder="Enter prompt"
-          readOnly={isPromptReadOnly}
-          draggable={false}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerMove={(e) => e.stopPropagation()}
-          onPointerUp={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onMouseMove={(e) => e.stopPropagation()}
-          onMouseUp={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-          onDragStart={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          onTouchEnd={(e) => e.stopPropagation()}
-        />
+        {imgModel !== "Topaz" ? (
+          <>
+            <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}{promptLockedByModel ? <span className="text-[10px] ml-1 text-foreground/60">(disabled for this model)</span> : null}</label>
+            <textarea
+              value={prompt}
+              onChange={(e) => {
+                if (isPromptReadOnly) return;
+                const v = e.target.value;
+                setPrompt(v);
+                update?.(id, { prompt: v });
+              }}
+              className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
+              placeholder="Enter prompt"
+              readOnly={isPromptReadOnly}
+              draggable={false}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerMove={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onMouseMove={(e) => e.stopPropagation()}
+              onMouseUp={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onDragStart={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+              onTouchEnd={(e) => e.stopPropagation()}
+            />
+          </>
+        ) : null}
         <div className="flex items-center gap-2">
           <button
             onClick={run}
