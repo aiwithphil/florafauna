@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
               role: "user",
               content: [
                 { type: "input_text", text: prompt },
-                ...images.map((url) => ({ type: "input_image", image_url: url as string })),
+                ...images.map((url) => ({ type: "input_image" as const, image_url: url as string, detail: "high" as const })),
               ],
             },
           ]

@@ -443,7 +443,13 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         : isImagen
         ? { prompt: effectivePrompt, ratio: imgRatioSelected }
         : isIdeogram
-        ? { prompt: effectivePrompt, ratio: imgRatioSelected }
+        ? {
+            prompt: effectivePrompt,
+            ratio: imgRatioSelected,
+            ...(isImageToImage && upstreamImages.length > 0
+              ? { characterImages: upstreamImages.slice(0, 2) }
+              : {}),
+          }
         : {
             prompt: effectivePrompt,
             size: mapRatioToGptSize(imgRatioSelected) ?? "1024x1024",
