@@ -430,12 +430,15 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       const isFlux = imgModel.startsWith("Flux ");
       const isImagen = imgModel.startsWith("Imagen ");
       const isIdeogram = imgModel.startsWith("Ideogram");
+      const isRunway = imgModel === "Runway References";
       const endpoint = isFlux
         ? "/api/generate-image/flux"
         : isImagen
         ? "/api/generate-image/imagen"
         : isIdeogram
         ? "/api/generate-image/ideogram"
+        : isRunway
+        ? "/api/generate-image/runway"
         : "/api/generate-image";
       const upstreamImages = resolveContextImages?.(id) ?? [];
       const body = isFlux
@@ -454,6 +457,12 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
             ...(isImageToImage && upstreamImages.length > 0
               ? { characterImages: upstreamImages.slice(0, 2) }
               : {}),
+          }
+        : isRunway
+        ? {
+            prompt: effectivePrompt,
+            ratio: imgRatioSelected,
+            ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 3) } : {}),
           }
         : {
             prompt: effectivePrompt,
