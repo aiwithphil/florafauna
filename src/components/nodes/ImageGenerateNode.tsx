@@ -13,6 +13,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const openMenu = (d as any)?._openMenu as ((nodeId: string, x: number, y: number) => void) | undefined;
   const selectNode = (d as any)?._select as ((nodeId: string) => void) | undefined;
   const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
+  const hasIncomingImageSource = (d as any)?._hasIncomingImageSource as ((nodeId: string) => boolean) | undefined;
+  const countIncomingImages = (d as any)?._countIncomingImages as ((nodeId: string) => number) | undefined;
   const initialPrompt = asString(d["prompt"], "A watercolor painting of a fern in a misty forest");
   const initialImgRatio = asString(d["imgRatio"], "1:1");
   const initialImgRatioApplied = asString((d as any)?.imgRatioApplied, initialImgRatio);
@@ -31,6 +33,68 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [imgModel, setImgModel] = useState(initialImgModel);
   const [openWhich, setOpenWhich] = useState<null | "ratio" | "model">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const isImageToImage = Boolean(hasIncomingImageSource?.(id));
+  const incomingImageCount = countIncomingImages?.(id) ?? 0;
+
+  const textToImageModels = React.useMemo(
+    () => [
+      "GPT Image",
+      "Flux Dev",
+      "Flux Kontext Max",
+      "Flux Pro 1.1 Ultra",
+      "Imagen 4",
+      "Ideogram 3.0",
+    ],
+    []
+  );
+  // Base i2i capability set when 1 image is connected
+  const imageToImageModelsBase = React.useMemo(
+    () => [
+      "GPT Image",
+      "Ideogram Character",
+      "Flux Kontext Max",
+      "Imagen 3",
+      "Runway References",
+      "Flux Canny",
+      "Flux Depth",
+      "Flux Redux",
+      "Topaz",
+    ],
+    []
+  );
+
+  // Restrict i2i models based on number of incoming images
+  const imageToImageModels = React.useMemo(() => {
+    if (!isImageToImage) return [] as string[];
+    const n = incomingImageCount;
+    if (n <= 1) return imageToImageModelsBase;
+    if (n === 2) return ["GPT Image", "Ideogram Character", "Flux Kontext Max", "Runway References"];
+    if (n === 3) return ["GPT Image", "Flux Kontext Max", "Runway References"];
+    if (n === 4) return ["GPT Image", "Flux Kontext Max"];
+    if (n === 5) return ["GPT Image", "Flux Kontext Max"];
+    if (n === 6) return ["GPT Image"];
+    if (n === 7) return ["GPT Image"];
+    if (n === 8) return ["GPT Image"];
+    if (n === 9) return ["GPT Image"];
+    return ["GPT Image"]; // n >= 10
+  }, [isImageToImage, incomingImageCount, imageToImageModelsBase]);
+
+  // Normalize model selection when the allowed set changes with connections
+  useEffect(() => {
+    if (isImageToImage) {
+      if (!imageToImageModels.includes(imgModel)) {
+        const next = imageToImageModels[0] ?? "GPT Image";
+        setImgModel(next);
+        update?.(id, { imgModel: next });
+      }
+    } else {
+      if (!textToImageModels.includes(imgModel)) {
+        const next = textToImageModels[0] ?? "GPT Image";
+        setImgModel(next);
+        update?.(id, { imgModel: next });
+      }
+    }
+  }, [isImageToImage, imgModel, imageToImageModels, textToImageModels, id, update]);
   function sanitizeEnhancedPrompt(text: string): string {
     let s = (text ?? "").trim();
     s = s.replace(/^\s*(\*\*)?\s*Enhanced Prompt:?\s*(\*\*)?\s*\n*/i, "");
@@ -118,9 +182,10 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       ];
     }
 
-    // Flux Kontext Max
+    // Flux Kontext Max (add Auto in image-to-image mode)
     if (imgModel === "Flux Kontext Max") {
       return [
+        ...(isImageToImage ? [{ heading: "Auto", options: [{ label: "Auto", value: "auto" }] }] as SizeGroup[] : []),
         { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
         { heading: "Horizontal", options: [
           { label: "21:9", value: "21:9" },
@@ -192,6 +257,80 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       ];
     }
 
+    // Image-to-Image specific models
+    if (imgModel === "Ideogram Character") {
+      return [
+        { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
+        // same sizes as Ideogram 3.0
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "3:1", value: "3:1" },
+          { label: "16:10", value: "16:10" },
+          { label: "16:9", value: "16:9" },
+          { label: "3:2", value: "3:2" },
+          { label: "4:3", value: "4:3" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "3:4", value: "3:4" },
+          { label: "2:3", value: "2:3" },
+          { label: "9:16", value: "9:16" },
+          { label: "10:16", value: "10:16" },
+          { label: "1:3", value: "1:3" },
+        ] },
+      ];
+    }
+
+    if (imgModel === "Imagen 3") {
+      return [
+        { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "4:3", value: "4:3" },
+          { label: "16:9", value: "16:9" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "3:4", value: "3:4" },
+          { label: "9:16", value: "9:16" },
+        ] },
+      ];
+    }
+
+    if (imgModel === "Runway References") {
+      return [
+        { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "21:9", value: "21:9" },
+          { label: "16:9", value: "16:9" },
+          { label: "4:3", value: "4:3" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "9:16", value: "9:16" },
+          { label: "3:4", value: "3:4" },
+        ] },
+      ];
+    }
+
+    if (imgModel === "Flux Canny" || imgModel === "Flux Depth" || imgModel === "Flux Redux") {
+      return [
+        { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "16:9", value: "16:9" },
+          { label: "4:3", value: "4:3" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "3:4", value: "3:4" },
+          { label: "9:16", value: "9:16" },
+        ] },
+      ];
+    }
+
+    if (imgModel === "Topaz") {
+      // No sizes – upscaler; leave empty to hide options logic or keep Auto only
+      return [];
+    }
+
     // Fallback: previous flat options under a generic heading
     return [
       {
@@ -204,7 +343,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         ],
       },
     ];
-  }, [imgModel]);
+  }, [imgModel, isImageToImage]);
 
   // Ensure currently selected ratio is valid for the chosen model; if not, default to the first option
   useEffect(() => {
@@ -288,8 +427,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       update?.(id, { imgRatioApplied: imgRatioSelected });
 
       const isFlux = imgModel.startsWith("Flux ");
-      const isImagen = imgModel === "Imagen 4";
-      const isIdeogram = imgModel === "Ideogram 3.0";
+      const isImagen = imgModel.startsWith("Imagen ");
+      const isIdeogram = imgModel.startsWith("Ideogram");
       const endpoint = isFlux
         ? "/api/generate-image/flux"
         : isImagen
@@ -325,6 +464,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   }, [prompt, imgRatioSelected, imgModel, id, update, promptLocked, resolveContextText]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
+  const promptLockedByModel = imgModel === "Topaz" || imgModel === "Flux Redux";
+  const isPromptReadOnly = promptLocked || promptLockedByModel;
 
   return (
     <div
@@ -353,43 +494,45 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         <div className="absolute -top-16 left-1/2 -translate-x-1/2 z-10" onMouseEnter={() => setIsToolbarHover(true)} onMouseLeave={() => setIsToolbarHover(false)} onMouseDown={(e) => { setIsToolbarHover(true); e.stopPropagation(); }} onClick={(e) => e.stopPropagation()}>
           <div ref={toolbarRef} className={`relative flex items-center gap-2 rounded-md border bg-background shadow-sm px-3 py-1.5 font-semibold ${selected || isToolbarHover || openWhich ? "opacity-100" : "opacity-70"}`}>
             {/* Ratio */}
-            <div className="relative group">
-              <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
-                <span>{imgRatioSelected === "auto" ? "Auto" : imgRatioSelected}</span>
-                <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
-                </svg>
-              </button>
-              <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Size</div>
-              {openWhich === "ratio" ? (
-                <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[200px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                  {sizeGroups.map((group, gi) => (
-                    <div key={gi} className={gi > 0 ? "border-t border-foreground/10" : undefined}>
-                      <div className="px-3 pt-2 pb-1 text-xs text-foreground/50">{group.heading}</div>
-                      {group.options.map((opt) => (
-                        <button
-                          key={opt.value}
-                          className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
-                          onClick={() => {
-                            // Only apply immediately if we don't yet have an image; otherwise wait until next generation starts
-                            setImgRatioSelected(opt.value);
-                            if (!imageUrl) {
-                              setImgRatioApplied(opt.value);
-                            }
-                            update?.(id, { imgRatio: opt.value, imgRatioSelected: opt.value, ...(imageUrl ? {} : { imgRatioApplied: opt.value }) });
-                            setOpenWhich(null);
-                          }}
-                        >
-                          <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.value} /></span>
-                          <span className="flex-1">{opt.label}</span>
-                          <span className="inline-flex w-4 justify-end">{imgRatioSelected === opt.value ? "✓" : ""}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            {sizeGroups.length > 0 ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
+                  <span>{imgRatioSelected === "auto" ? "Auto" : imgRatioSelected}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Size</div>
+                {openWhich === "ratio" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[200px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {sizeGroups.map((group, gi) => (
+                      <div key={gi} className={gi > 0 ? "border-t border-foreground/10" : undefined}>
+                        <div className="px-3 pt-2 pb-1 text-xs text-foreground/50">{group.heading}</div>
+                        {group.options.map((opt) => (
+                          <button
+                            key={opt.value}
+                            className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
+                            onClick={() => {
+                              // Only apply immediately if we don't yet have an image; otherwise wait until next generation starts
+                              setImgRatioSelected(opt.value);
+                              if (!imageUrl) {
+                                setImgRatioApplied(opt.value);
+                              }
+                              update?.(id, { imgRatio: opt.value, imgRatioSelected: opt.value, ...(imageUrl ? {} : { imgRatioApplied: opt.value }) });
+                              setOpenWhich(null);
+                            }}
+                          >
+                            <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.value} /></span>
+                            <span className="flex-1">{opt.label}</span>
+                            <span className="inline-flex w-4 justify-end">{imgRatioSelected === opt.value ? "✓" : ""}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {/* Model */}
             <div className="relative group">
               <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "model" ? null : "model")); }}>
@@ -401,14 +544,16 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
               <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Model</div>
               {openWhich === "model" ? (
                 <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[260px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                  {[
-                    "GPT Image",
-                    "Flux Dev",
-                    "Flux Kontext Max",
-                    "Flux Pro 1.1 Ultra",
-                    "Imagen 4",
-                    "Ideogram 3.0",
-                  ].map((label) => (
+                  {(isImageToImage
+                    ? imageToImageModels
+                    : [
+                        "GPT Image",
+                        "Flux Dev",
+                        "Flux Kontext Max",
+                        "Flux Pro 1.1 Ultra",
+                        "Imagen 4",
+                        "Ideogram 3.0",
+                      ]).map((label) => (
                     <button
                       key={label}
                       className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
@@ -465,18 +610,18 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       )}
       <div className="px-3 py-2 border-b text-sm font-semibold">Image Generate</div>
       <div className="p-3 space-y-2">
-        <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}</label>
+        <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}{promptLockedByModel ? <span className="text-[10px] ml-1 text-foreground/60">(disabled for this model)</span> : null}</label>
         <textarea
           value={prompt}
           onChange={(e) => {
-            if (promptLocked) return;
+            if (isPromptReadOnly) return;
             const v = e.target.value;
             setPrompt(v);
             update?.(id, { prompt: v });
           }}
           className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
           placeholder="Enter prompt"
-          readOnly={promptLocked}
+          readOnly={isPromptReadOnly}
           draggable={false}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerMove={(e) => e.stopPropagation()}

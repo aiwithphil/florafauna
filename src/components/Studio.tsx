@@ -71,6 +71,17 @@ export function Studio() {
       // Enforce: only a single text block can connect into an image/video as prompt source
       const sourceNode = nodes.find((n) => n.id === connection.source);
       const targetNode = nodes.find((n) => n.id === connection.target);
+      // Enforce maximum of 10 incoming images per image block
+      const isImageToImage = (sourceNode?.type === "imageGenerate") && (targetNode?.type === "imageGenerate");
+      if (isImageToImage) {
+        const incomingImages = edges
+          .filter((e) => e.target === connection.target)
+          .map((e) => nodes.find((n) => n.id === e.source))
+          .filter((n): n is Node => Boolean(n) && n!.type === "imageGenerate");
+        if (incomingImages.length >= 10) {
+          return;
+        }
+      }
       const isTextToMedia = (sourceNode?.type === "textGenerate") && (targetNode?.type === "imageGenerate" || targetNode?.type === "videoGenerate");
       if (isTextToMedia) {
         const alreadyHasText = edges.some((e) => e.target === connection.target && nodes.find((n) => n.id === e.source)?.type === "textGenerate");
@@ -469,6 +480,20 @@ export function Studio() {
               _select: selectNode,
                 _resolveContextText: resolveContextText,
                 _resolveContextImages: resolveContextImages,
+                _countIncomingImages: (nodeId: string) => {
+                  const incoming = edges
+                    .filter((e) => e.target === nodeId)
+                    .map((e) => nodes.find((nn) => nn.id === e.source))
+                    .filter(Boolean) as Node[];
+                  return incoming.filter((nn) => nn.type === "imageGenerate").length;
+                },
+                _hasIncomingImageSource: (nodeId: string) => {
+                  const incoming = edges
+                    .filter((e) => e.target === nodeId)
+                    .map((e) => nodes.find((nn) => nn.id === e.source))
+                    .filter(Boolean) as Node[];
+                  return incoming.some((nn) => nn.type === "imageGenerate");
+                },
             },
           })) as unknown as Node[]}
           edges={edges}
