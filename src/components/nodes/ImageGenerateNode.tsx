@@ -15,6 +15,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
   const hasIncomingImageSource = (d as any)?._hasIncomingImageSource as ((nodeId: string) => boolean) | undefined;
   const countIncomingImages = (d as any)?._countIncomingImages as ((nodeId: string) => number) | undefined;
+  const resolveContextImages = (d as any)?._resolveContextImages as ((nodeId: string) => string[]) | undefined;
   const initialPrompt = asString(d["prompt"], "A watercolor painting of a fern in a misty forest");
   const initialImgRatio = asString(d["imgRatio"], "1:1");
   const initialImgRatioApplied = asString((d as any)?.imgRatioApplied, initialImgRatio);
@@ -436,13 +437,18 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
         : isIdeogram
         ? "/api/generate-image/ideogram"
         : "/api/generate-image";
+      const upstreamImages = resolveContextImages?.(id) ?? [];
       const body = isFlux
         ? { prompt: effectivePrompt, model: imgModel, ratio: imgRatioSelected }
         : isImagen
         ? { prompt: effectivePrompt, ratio: imgRatioSelected }
         : isIdeogram
         ? { prompt: effectivePrompt, ratio: imgRatioSelected }
-        : { prompt: effectivePrompt, size: mapRatioToGptSize(imgRatioSelected) ?? "1024x1024" };
+        : {
+            prompt: effectivePrompt,
+            size: mapRatioToGptSize(imgRatioSelected) ?? "1024x1024",
+            ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
+          };
 
       const res = await fetch(endpoint, {
         method: "POST",
