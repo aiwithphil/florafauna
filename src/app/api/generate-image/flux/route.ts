@@ -38,6 +38,15 @@ function mapModelToPath(model: string): string {
       return "/flux-pro-1.1-ultra";
     case "Flux Pro 1.1 Ultra":
       return "/flux-pro-1.1-ultra";
+    case "Flux Canny":
+      // FLUX.1 [pro] control via Canny
+      return "/flux-pro-1.0-canny";
+    case "Flux Depth":
+      // FLUX.1 [pro] control via Depth map
+      return "/flux-pro-1.0-depth";
+    case "Flux Redux":
+      // FLUX.1 [pro] control via Redux (structure)
+      return "/flux-pro-1.0-redux";
     default:
       return "/flux-dev";
   }
@@ -157,6 +166,7 @@ export async function POST(req: NextRequest) {
       // Kontext i2i specific
       input_image?: string; // base64-encoded image bytes (no data URL prefix)
       resolution_mode?: "auto" | "match_input";
+      control_image?: string; // base64-encoded image bytes for control models
     };
     // Some Flux endpoints may accept empty prompt with i2i; use single space when empty to be safe for i2i
     const safePrompt = (prompt && prompt.trim().length > 0) ? prompt : " ";
@@ -178,6 +188,7 @@ export async function POST(req: NextRequest) {
     }
 
     const isKontext = model === "Flux Kontext Max";
+    const isControlModel = model === "Flux Canny" || model === "Flux Depth" || model === "Flux Redux";
     const hasI2I = Array.isArray(images) && images.length > 0;
 
     if (hasI2I && isKontext) {
@@ -192,6 +203,16 @@ export async function POST(req: NextRequest) {
         payload.resolution_mode = "auto";
         payload.aspect_ratio = ratio;
         // Provide concrete dims as a hint if supported
+        const dims = dimsForRatio(ratio);
+        payload.width = dims.width;
+        payload.height = dims.height;
+      }
+    } else if (hasI2I && isControlModel) {
+      // Control models expect a control image payload
+      const { b64 } = await toBase64FromUrlOrDataUrl(images[0]);
+      payload.control_image = b64;
+      if (ratio !== "auto") {
+        payload.aspect_ratio = ratio;
         const dims = dimsForRatio(ratio);
         payload.width = dims.width;
         payload.height = dims.height;
