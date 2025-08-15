@@ -92,10 +92,11 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   }
 
   const isGen4Turbo = vidModel === "Runway Gen 4 Turbo";
+  const isAleph = vidModel === "Runway Aleph";
   type SizeOption = { label: string; value: string };
   type SizeGroup = { heading: string; options: SizeOption[] };
   const sizeGroups: SizeGroup[] = React.useMemo(() => {
-    if (isGen4Turbo) {
+    if (isGen4Turbo || isAleph) {
       return [
         { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
         { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
@@ -118,7 +119,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         { label: "9:16 (Vertical)", value: "9:16" },
       ]},
     ];
-  }, [isGen4Turbo]);
+  }, [isGen4Turbo, isAleph]);
 
   function mapFriendlyRatioToApi(value: string): string {
     switch (value) {
@@ -175,6 +176,55 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       { ratio: "1584:672", value: 1584 / 672 }, // 21:9 ≈ 2.357
       { ratio: "832:1104", value: 832 / 1104 }, // 3:4 ≈ 0.753
       { ratio: "720:1280", value: 720 / 1280 }, // 9:16 = 0.5625
+    ];
+    let best = candidates[0];
+    let bestDelta = Math.abs(r - candidates[0].value);
+    for (let i = 1; i < candidates.length; i++) {
+      const d = Math.abs(r - candidates[i].value);
+      if (d < bestDelta) {
+        best = candidates[i];
+        bestDelta = d;
+      }
+    }
+    return best.ratio;
+  }
+
+  async function getVideoNaturalSize(src: string): Promise<{ width: number; height: number } | null> {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return await new Promise((resolve) => {
+        const video = document.createElement("video");
+        let url = src;
+        try {
+          const isData = src.startsWith("data:");
+          const isHttp = src.startsWith("http://") || src.startsWith("https://");
+          if (!isData && isHttp) {
+            url = `/api/download?url=${encodeURIComponent(src)}&filename=probe.mp4`;
+          }
+        } catch {}
+        video.preload = "metadata";
+        video.onloadedmetadata = () => {
+          resolve({ width: (video as any).videoWidth || 0, height: (video as any).videoHeight || 0 });
+        };
+        video.onerror = () => resolve(null);
+        video.src = url;
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function pickApiRatioForAutoFromVideo(src: string): Promise<string> {
+    const dims = await getVideoNaturalSize(src);
+    if (!dims || dims.width <= 0 || dims.height <= 0) return "1280:720";
+    const r = dims.width / Math.max(1, dims.height);
+    const candidates: Array<{ ratio: string; value: number }> = [
+      { ratio: "960:960", value: 1.0 }, // 1:1
+      { ratio: "1104:832", value: 1104 / 832 }, // 4:3
+      { ratio: "1280:720", value: 1280 / 720 }, // 16:9
+      { ratio: "1584:672", value: 1584 / 672 }, // 21:9
+      { ratio: "832:1104", value: 832 / 1104 }, // 3:4
+      { ratio: "720:1280", value: 720 / 1280 }, // 9:16
     ];
     let best = candidates[0];
     let bestDelta = Math.abs(r - candidates[0].value);
@@ -251,11 +301,15 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
 
       setWarning("");
 
-      // Resolve API ratio, supporting Auto for Gen-4 Turbo based on upstream image aspect
+      // Resolve API ratio, supporting Auto mapping for Gen-4 Turbo and Aleph
       let apiRatio = mapFriendlyRatioToApi(vidRatio);
       if (apiRatio === "auto" && isGen4Turbo) {
         const imageForAuto = upstreamImages[0];
         apiRatio = imageForAuto ? await pickApiRatioForAutoFromImage(imageForAuto) : "1280:720";
+      }
+      if (apiRatio === "auto" && isAleph) {
+        const videoForAuto = upstreamVideos[0];
+        apiRatio = videoForAuto ? await pickApiRatioForAutoFromVideo(videoForAuto) : "1280:720";
       }
 
       const res = await fetch("/api/generate-video", {
@@ -312,37 +366,39 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       {showToolbar && (
         <div className="absolute -top-16 left-1/2 -translate-x-1/2 z-10" onMouseEnter={() => setIsToolbarHover(true)} onMouseLeave={() => setIsToolbarHover(false)} onMouseDown={(e) => { setIsToolbarHover(true); e.stopPropagation(); }} onClick={(e) => e.stopPropagation()}>
           <div ref={toolbarRef} className={`relative flex items-center gap-2 rounded-md border bg-background shadow-sm px-3 py-1.5 font-semibold ${selected || isToolbarHover || openWhich ? "opacity-100" : "opacity-70"}`}>
-            {/* Duration */}
-            <div className="relative group">
-              <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "duration" ? null : "duration")); }}>
-                <span>{durationSec === 5 ? "5S" : "10S"}</span>
-                <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
-                </svg>
-              </button>
-              <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Duration</div>
-              {openWhich === "duration" ? (
-                <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                  {([
-                    { label: "5 Seconds", value: 5 },
-                    { label: "10 Seconds", value: 10 },
-                  ] as const).map((opt) => (
-                    <button
-                      key={opt.value}
-                      className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
-                      onClick={() => {
-                        setDurationSec(opt.value);
-                        update?.(id, { vidDuration: opt.value });
-                        setOpenWhich(null);
-                      }}
-                    >
-                      <span className="flex-1">{opt.label}</span>
-                      <span className="inline-flex w-4 justify-end">{durationSec === opt.value ? "✓" : ""}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            {/* Duration (hidden for Aleph since only 5s supported) */}
+            {vidModel !== "Runway Aleph" ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "duration" ? null : "duration")); }}>
+                  <span>{durationSec === 5 ? "5S" : "10S"}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Duration</div>
+                {openWhich === "duration" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {([
+                      { label: "5 Seconds", value: 5 },
+                      { label: "10 Seconds", value: 10 },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.value}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
+                        onClick={() => {
+                          setDurationSec(opt.value);
+                          update?.(id, { vidDuration: opt.value });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span className="flex-1">{opt.label}</span>
+                        <span className="inline-flex w-4 justify-end">{durationSec === opt.value ? "✓" : ""}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {/* Ratio */}
             <div className="relative group">
               <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>

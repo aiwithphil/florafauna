@@ -118,6 +118,64 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    function computeOrigin(): string {
+      const configured = process.env.PUBLIC_BASE_URL;
+      if (configured) return configured.replace(/\/$/, "");
+      const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "localhost:3000";
+      const proto = req.headers.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
+      return `${proto}://${host}`;
+    }
+
+    function toPublicDownloadUrlIfDataUrl(input: string, filename: string): string {
+      if (!input.startsWith("data:")) return input;
+      const origin = computeOrigin();
+      return `${origin}/api/download?url=${encodeURIComponent(input)}&filename=${encodeURIComponent(filename)}`;
+    }
+
+    function toPublicDownloadUrl(input: string, filename: string): string {
+      const origin = computeOrigin();
+      return `${origin}/api/download?url=${encodeURIComponent(input)}&filename=${encodeURIComponent(filename)}`;
+    }
+
+    function isHttpsUrl(u: string): boolean {
+      try {
+        const url = new URL(u);
+        return url.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }
+
+    async function ensureHttpsAssetUrl(input: string, filename: string): Promise<string | null> {
+      // If already HTTPS, accept as-is
+      if (typeof input === "string" && input.startsWith("https://")) return input;
+
+      // Try uploading to Runway assets first
+      const uploaded = await uploadAssetFromInput(input);
+      if (uploaded && isHttpsUrl(uploaded)) return uploaded;
+
+      // If data URL, fall back to proxy if origin is HTTPS
+      if (input.startsWith("data:")) {
+        const origin = computeOrigin();
+        if (origin.startsWith("https://")) {
+          return toPublicDownloadUrlIfDataUrl(input, filename);
+        }
+        return null;
+      }
+
+      // If plain HTTP URL, proxy only if our origin is HTTPS
+      if (input.startsWith("http://")) {
+        const origin = computeOrigin();
+        if (origin.startsWith("https://")) {
+          return toPublicDownloadUrl(input, filename);
+        }
+        return null;
+      }
+
+      // Unknown scheme; reject
+      return null;
+    }
+
     // Route by model
     if (model === "Runway Gen 4 Turbo") {
       // Requires image input; use the first provided image
@@ -125,18 +183,22 @@ export async function POST(req: NextRequest) {
       if (!promptImage) {
         return NextResponse.json({ error: "Runway Gen 4 Turbo requires an input image" }, { status: 400 });
       }
-      // Ensure the image is a Runway-hosted asset for compatibility
-      promptImage = await uploadAssetFromInput(promptImage);
-      const videoTask = await client.imageToVideo
-        .create({
-          model: "gen4_turbo",
-          promptImage,
-          promptText: prompt,
-          publicFigureThreshold: "low",
-          ratio: ratio as AllowedVideoRatio,
-          duration: duration as 5 | 10,
-        })
-        .waitForTaskOutput();
+      // Ensure the image URL is HTTPS (upload or proxy if needed)
+      const ensuredImage = await ensureHttpsAssetUrl(promptImage, "image.png");
+      if (!ensuredImage) {
+        return NextResponse.json({ error: "Only HTTPS URLs are allowed for promptImage. Set PUBLIC_BASE_URL to an https origin or try a different source." }, { status: 400 });
+      }
+      promptImage = ensuredImage;
+      const params: any = {
+        model: "gen4_turbo",
+        promptImage,
+        imageUri: promptImage,
+        promptText: prompt,
+        publicFigureThreshold: "low",
+        ratio: ratio as AllowedVideoRatio,
+        duration: duration as 5 | 10,
+      };
+      const videoTask = await client.imageToVideo.create(params).waitForTaskOutput();
       const videoOutput = (videoTask as TaskOutput).output;
       const url = Array.isArray(videoOutput) ? videoOutput[0] : undefined;
       return NextResponse.json({ url });
@@ -149,19 +211,28 @@ export async function POST(req: NextRequest) {
       if (!promptImage || !promptVideo) {
         return NextResponse.json({ error: "Runway Act Two requires one image and one video input" }, { status: 400 });
       }
-      promptImage = await uploadAssetFromInput(promptImage);
-      promptVideo = await uploadAssetFromInput(promptVideo);
-      const videoTask = await client.videoToVideo
-        .create({
-          model: "act_two",
-          promptImage,
-          promptVideo,
-          promptText: prompt,
-          publicFigureThreshold: "low",
-          ratio: ratio as AllowedVideoRatio,
-          duration: duration as 5 | 10,
-        })
-        .waitForTaskOutput();
+      const ensuredActTwoImage = await ensureHttpsAssetUrl(promptImage, "image.png");
+      if (!ensuredActTwoImage) {
+        return NextResponse.json({ error: "Only HTTPS URLs are allowed for promptImage. Set PUBLIC_BASE_URL to an https origin or try a different source." }, { status: 400 });
+      }
+      promptImage = ensuredActTwoImage;
+      const ensuredActTwoVideo = await ensureHttpsAssetUrl(promptVideo, "video.mp4");
+      if (!ensuredActTwoVideo) {
+        return NextResponse.json({ error: "Only HTTPS URLs are allowed for promptVideo. Set PUBLIC_BASE_URL to an https origin or try a different source." }, { status: 400 });
+      }
+      promptVideo = ensuredActTwoVideo;
+      const actTwoParams: any = {
+        model: "act_two",
+        promptImage,
+        imageUri: promptImage,
+        promptVideo,
+        videoUri: promptVideo,
+        promptText: prompt,
+        publicFigureThreshold: "low",
+        ratio: ratio as AllowedVideoRatio,
+        duration: duration as 5 | 10,
+      };
+      const videoTask = await client.videoToVideo.create(actTwoParams).waitForTaskOutput();
       const videoOutput = (videoTask as TaskOutput).output;
       const url = Array.isArray(videoOutput) ? videoOutput[0] : undefined;
       return NextResponse.json({ url });
@@ -173,28 +244,27 @@ export async function POST(req: NextRequest) {
       if (!promptVideo) {
         return NextResponse.json({ error: "Runway Aleph requires a video input" }, { status: 400 });
       }
-      promptVideo = await uploadAssetFromInput(promptVideo);
-      const videoTask = await client.videoToVideo
-        .create({
-          model: "aleph",
-          promptVideo,
-          promptText: prompt,
-          publicFigureThreshold: "low",
-          ratio: ratio as AllowedVideoRatio,
-          duration: duration as 5 | 10,
-        })
-        .waitForTaskOutput();
+      const ensuredAlephVideo = await ensureHttpsAssetUrl(promptVideo, "video.mp4");
+      if (!ensuredAlephVideo) {
+        return NextResponse.json({ error: "Only HTTPS URLs are allowed for promptVideo. Set PUBLIC_BASE_URL to an https origin or try a different source." }, { status: 400 });
+      }
+      promptVideo = ensuredAlephVideo;
+      const alephParams: any = {
+        model: "gen4_aleph",
+        promptVideo,
+        videoUri: promptVideo,
+        promptText: prompt,
+        publicFigureThreshold: "low",
+        ratio: ratio as AllowedVideoRatio,
+        duration: 5,
+      };
+      const videoTask = await client.videoToVideo.create(alephParams).waitForTaskOutput();
       const videoOutput = (videoTask as TaskOutput).output;
       const url = Array.isArray(videoOutput) ? videoOutput[0] : undefined;
       return NextResponse.json({ url });
     }
 
     return NextResponse.json({ error: "Unsupported model" }, { status: 400 });
-
-    const videoOutput = (videoTask as TaskOutput).output;
-    const url = Array.isArray(videoOutput) ? videoOutput[0] : undefined;
-
-    return NextResponse.json({ url });
   } catch (error: unknown) {
     if (error instanceof TaskFailedError) {
       console.error("/api/generate-video task failed", error.taskDetails);
