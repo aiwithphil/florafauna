@@ -399,6 +399,19 @@ export function Studio() {
     return urls;
   }, [edges, nodes]);
 
+  // Collect upstream video URLs for a given node
+  const resolveContextVideos = useCallback((nodeId: string): string[] => {
+    const incoming = edges
+      .filter((e) => e.target === nodeId)
+      .map((e) => nodes.find((n) => n.id === e.source))
+      .filter(Boolean) as Node[];
+    const incomingVideos = incoming.filter((n) => n.type === "videoGenerate");
+    const urls = incomingVideos
+      .map((n) => (n.data as any)?.videoUrl)
+      .filter((u): u is string => typeof u === "string" && u.length > 0);
+    return urls;
+  }, [edges, nodes]);
+
   // Apply prompt locking to media nodes based on incoming text connection
   useEffect(() => {
     setNodes((prev) => {
@@ -486,6 +499,7 @@ export function Studio() {
               _select: selectNode,
                 _resolveContextText: resolveContextText,
                 _resolveContextImages: resolveContextImages,
+                _resolveContextVideos: resolveContextVideos,
                 _countIncomingImages: (nodeId: string) => {
                   const incoming = edges
                     .filter((e) => e.target === nodeId)
