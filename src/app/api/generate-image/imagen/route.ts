@@ -15,12 +15,13 @@ const bodySchema = z.object({
   // Allow empty prompt for potential future i2i; enforce for t2i below
   prompt: z.string().optional().default(""),
   ratio: z.enum(AllowedRatios).optional().default("1:1"),
+  model: z.enum(["Imagen 4", "Imagen 4 Ultra"]).optional().default("Imagen 4"),
 });
 
 export async function POST(req: NextRequest) {
   try {
     const json = await req.json();
-    const { prompt, ratio } = bodySchema.parse(json);
+    const { prompt, ratio, model } = bodySchema.parse(json);
 
     const apiKey = process.env.GOOGLE_API_KEY;
     if (!apiKey) {
@@ -30,12 +31,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Select Imagen endpoint by model variant
+    // Docs reference: Imagen 4 model IDs and REST endpoint shape
+    // https://ai.google.dev/gemini-api/docs/imagen#imagen-4
     const url =
-      "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-preview-06-06:predict";
+      model === "Imagen 4 Ultra"
+        ? "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-ultra-generate-001:predict"
+        : "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict";
 
     // For Imagen, currently no i2i in this route; require non-empty prompt
     if (!prompt || prompt.trim().length === 0) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
+    }
+
+    // Build parameters; for Imagen 4 Ultra with 1:1, request 2K size (2048x2048)
+    const parameters: Record<string, string | number> = {
+      sampleCount: 1,
+      aspectRatio: ratio,
+    };
+    if (model === "Imagen 4 Ultra") {
+      // Per docs, Ultra supports sampleImageSize: "1K" | "2K"
+      parameters.sampleImageSize = "2K";
     }
 
     const payload = {
@@ -44,10 +60,7 @@ export async function POST(req: NextRequest) {
           prompt,
         },
       ],
-      parameters: {
-        sampleCount: 1,
-        aspectRatio: ratio,
-      },
+      parameters,
     } as const;
 
     const res = await fetch(url, {

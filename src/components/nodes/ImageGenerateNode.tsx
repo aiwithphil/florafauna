@@ -45,6 +45,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       "Flux Kontext Max",
       "Flux Pro 1.1 Ultra",
       "Imagen 4",
+      "Imagen 4 Ultra",
       "Ideogram 3.0",
     ],
     []
@@ -55,11 +56,9 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       "GPT Image",
       "Ideogram Character",
       "Flux Kontext Max",
-      "Imagen 3",
       "Runway References",
       "Flux Canny",
       "Flux Depth",
-      "Flux Redux",
       "Topaz",
     ],
     []
@@ -238,6 +237,21 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       ];
     }
 
+    // Imagen 4 Ultra
+    if (imgModel === "Imagen 4 Ultra") {
+      return [
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "4:3", value: "4:3" },
+          { label: "16:9", value: "16:9" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "3:4", value: "3:4" },
+          { label: "9:16", value: "9:16" },
+        ] },
+      ];
+    }
+
     // Ideogram 3.0
     if (imgModel === "Ideogram 3.0") {
       return [
@@ -282,20 +296,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       ];
     }
 
-    if (imgModel === "Imagen 3") {
-      return [
-        { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
-        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
-        { heading: "Horizontal", options: [
-          { label: "4:3", value: "4:3" },
-          { label: "16:9", value: "16:9" },
-        ] },
-        { heading: "Vertical", options: [
-          { label: "3:4", value: "3:4" },
-          { label: "9:16", value: "9:16" },
-        ] },
-      ];
-    }
+    
 
     if (imgModel === "Runway References") {
       return [
@@ -313,7 +314,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       ];
     }
 
-    if (imgModel === "Flux Canny" || imgModel === "Flux Depth" || imgModel === "Flux Redux") {
+    if (imgModel === "Flux Canny" || imgModel === "Flux Depth") {
       return [
         { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
         { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
@@ -495,7 +496,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
           ...(isImageToImage && upstreamImages.length > 0 ? { images: upstreamImages.slice(0, 10) } : {}),
         };
       } else if (isImagen) {
-        payload = { prompt: effectivePrompt, ratio: imgRatioSelected };
+        payload = { prompt: effectivePrompt, ratio: imgRatioSelected, model: imgModel };
       } else if (isIdeogram) {
         payload = {
           prompt: effectivePrompt,
@@ -538,7 +539,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   }, [prompt, imgRatioSelected, imgModel, id, update, promptLocked, resolveContextText]);
 
   const showToolbar = isHovered || !!selected || isToolbarHover || isBridgeHover;
-  const promptLockedByModel = imgModel === "Topaz" || imgModel === "Flux Redux";
+  const promptLockedByModel = imgModel === "Topaz";
   const isPromptReadOnly = promptLocked || promptLockedByModel;
 
   return (
@@ -657,6 +658,7 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
                         "Flux Kontext Max",
                         "Flux Pro 1.1 Ultra",
                         "Imagen 4",
+                        "Imagen 4 Ultra",
                         "Ideogram 3.0",
                       ]).map((label) => (
                     <button

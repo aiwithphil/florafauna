@@ -212,14 +212,20 @@ export function Studio() {
       } as Node;
     });
     const selectedIdSet = new Set(groupNodes.map((n) => n.id));
+    // Duplicate edges that touch any selected node. Map selected endpoints to their duplicates,
+    // and keep non-selected endpoints pointing to the original nodes so connections are preserved.
     const newEdges: Edge[] = edges
-      .filter((e) => selectedIdSet.has(e.source) && selectedIdSet.has(e.target))
-      .map((e) => ({
-        ...e,
-        id: `${idMap.get(e.source)!}-${idMap.get(e.target)!}-${Math.random().toString(36).slice(2, 8)}`,
-        source: idMap.get(e.source)!,
-        target: idMap.get(e.target)!,
-      }));
+      .filter((e) => selectedIdSet.has(e.source) || selectedIdSet.has(e.target))
+      .map((e) => {
+        const newSource = idMap.get(e.source) ?? e.source;
+        const newTarget = idMap.get(e.target) ?? e.target;
+        return {
+          ...e,
+          id: `${newSource}-${newTarget}-${Math.random().toString(36).slice(2, 8)}`,
+          source: newSource,
+          target: newTarget,
+        } as Edge;
+      });
     setNodes((nds) => nds.concat(newNodes));
     if (newEdges.length) setEdges((eds) => eds.concat(newEdges));
   }, [getPointerFlowPosition, getSelectedNodes, nodes, edges]);
