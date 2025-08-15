@@ -65,13 +65,15 @@ const bodySchema = z.object({
     "Kling 2.1 Master",
     "Kling 2.0 Master",
     "Kling 1.6 Pro",
-    // Runway
+    // Runway / Topaz
     "Runway Gen 4 Turbo",
     "Runway Act Two",
     "Runway Aleph",
+    "Topaz",
   ]).optional().default("Kling 1.6 Pro"),
   images: z.array(z.string().min(1)).optional().default([]),
   videos: z.array(z.string().min(1)).optional().default([]),
+  topazScale: z.union([z.literal("2"), z.literal("3"), z.literal("4")]).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -98,7 +100,7 @@ export async function POST(req: NextRequest) {
     }
 
     const json = await req.json();
-    const { prompt, duration, ratio, model, images, videos } = bodySchema.parse(json);
+    const { prompt, duration, ratio, model, images, videos, topazScale } = bodySchema.parse(json);
 
     // Helpers shared by all providers
     function computeOrigin(): string {
@@ -494,6 +496,38 @@ export async function POST(req: NextRequest) {
       const videoOutput = (videoTask as TaskOutput).output;
       const url = Array.isArray(videoOutput) ? videoOutput[0] : undefined;
       return NextResponse.json({ url });
+    }
+
+    if (model === "Topaz") {
+      // Requires one video input; optionally use scale to influence output resolution
+      const promptVideo = videos[0];
+      if (!promptVideo) {
+        return NextResponse.json({ error: "Topaz requires a video input" }, { status: 400 });
+      }
+      // For Topaz, compute output size from scale if possible; if ratio is known, we may ignore here
+      let outputWidth: number | undefined;
+      let outputHeight: number | undefined;
+      const desiredScale = Number(topazScale || 2);
+      try {
+        // We cannot probe dimensions server-side reliably without fetching; Topaz can infer. Keep undefined.
+      } catch {}
+      const origin = computeOrigin();
+      const proxyVideo = promptVideo.startsWith("data:") ? promptVideo : toPublicDownloadUrl(promptVideo, "video.mp4");
+      const topazResp = await fetch(`${origin}/api/generate-video/topaz`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          video: proxyVideo,
+          output_width: outputWidth,
+          output_height: outputHeight,
+          scale: String(desiredScale),
+        }),
+      });
+      const topazJson = await topazResp.json();
+      if (!topazResp.ok) {
+        return NextResponse.json({ error: topazJson?.error || "Topaz failed", details: topazJson }, { status: 502 });
+      }
+      return NextResponse.json({ url: topazJson?.url });
     }
 
     return NextResponse.json({ error: "Unsupported model" }, { status: 400 });

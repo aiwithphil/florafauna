@@ -15,8 +15,29 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const resolveContextText = (d as any)?._resolveContextText as ((nodeId: string) => string) | undefined;
   const resolveContextImages = (d as any)?._resolveContextImages as ((nodeId: string) => string[]) | undefined;
   const resolveContextVideos = (d as any)?._resolveContextVideos as ((nodeId: string) => string[]) | undefined;
+  const hasIncomingVideoSource = typeof (d as any)?._hasIncomingVideoSource === "function" ? Boolean((d as any)?._hasIncomingVideoSource(id)) : false;
   const initialPrompt = asString(d["prompt"], "A short looping animation of leaves swaying in the wind");
-  const initialVidModel = asString(d["vidModel"], "Kling 1.6 Pro");
+  // Default model should be the first available for current context
+  const initialAvailableModels = hasIncomingVideoSource
+    ? [
+        "Runway Act Two",
+        "Runway Aleph",
+        "Topaz",
+      ]
+    : [
+        "Kling 2.1 Master",
+        "Kling 2.0 Master",
+        "Kling 1.6 Pro",
+        "Veo 2",
+        "Veo 3",
+        "Minimax Hailuo",
+        "Minimax Hailuo 02 Pro",
+        "Pika",
+        "Runway Gen 4 Turbo",
+        "Runway Act Two",
+        "Runway Aleph",
+      ];
+  const initialVidModel = asString(d["vidModel"], initialAvailableModels[0]);
   const hasIncomingImageSource = typeof (d as any)?._hasIncomingImageSource === "function" ? Boolean((d as any)?._hasIncomingImageSource(id)) : false;
   const isInitialKling = ["Kling 2.1 Master", "Kling 2.0 Master", "Kling 1.6 Pro"].includes(initialVidModel);
   const defaultKlingRatio = hasIncomingImageSource ? "auto" : "1:1";
@@ -32,9 +53,10 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const [isBridgeHover, setIsBridgeHover] = useState(false);
   const [vidRatio, setVidRatio] = useState(initialVidRatio);
   const [vidModel, setVidModel] = useState(initialVidModel);
-  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "duration">(null);
+  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "duration" | "scale">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [warning, setWarning] = useState<string>("");
+  const [topazScale, setTopazScale] = useState<string>(asString((d as any)?.topazVideoScale, "2"));
   const initialDuration = Number.isFinite(Number((d as any)?.vidDuration)) ? Number((d as any)?.vidDuration) : 5;
   const [durationSec, setDurationSec] = useState<5 | 10>((initialDuration === 10 ? 10 : 5));
   function sanitizeEnhancedPrompt(text: string): string {
@@ -96,7 +118,41 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
 
   const isGen4Turbo = vidModel === "Runway Gen 4 Turbo";
   const isAleph = vidModel === "Runway Aleph";
+  const isTopazModel = vidModel === "Topaz";
   const isKling = vidModel === "Kling 2.1 Master" || vidModel === "Kling 2.0 Master" || vidModel === "Kling 1.6 Pro";
+
+  // Determine available models for the current context (e.g., when a video is attached)
+  const availableModels = React.useMemo(() => {
+    return hasIncomingVideoSource
+      ? [
+          "Runway Act Two",
+          "Runway Aleph",
+          "Topaz",
+        ]
+      : [
+          "Kling 2.1 Master",
+          "Kling 2.0 Master",
+          "Kling 1.6 Pro",
+          "Veo 2",
+          "Veo 3",
+          "Minimax Hailuo",
+          "Minimax Hailuo 02 Pro",
+          "Pika",
+          "Runway Gen 4 Turbo",
+          "Runway Act Two",
+          "Runway Aleph",
+        ];
+  }, [hasIncomingVideoSource]);
+
+  // If the current model is not valid for the context, default to the first available option
+  useEffect(() => {
+    if (!availableModels.includes(vidModel)) {
+      const next = availableModels[0];
+      setVidModel(next);
+      update?.(id, { vidModel: next });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableModels]);
   type SizeOption = { label: string; value: string };
   type SizeGroup = { heading: string; options: SizeOption[] };
   const sizeGroups: SizeGroup[] = React.useMemo(() => {
@@ -263,7 +319,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   }, [promptLocked, d, prompt]);
 
   useEffect(() => {
-    update?.(id, { prompt: initialPrompt, videoUrl: videoUrl ?? "", vidRatio: initialVidRatio, vidModel: initialVidModel });
+    update?.(id, { prompt: initialPrompt, videoUrl: videoUrl ?? "", vidRatio: initialVidRatio, vidModel: initialVidModel, topazVideoScale: topazScale });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -298,6 +354,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       const isGen4Turbo = vidModel === "Runway Gen 4 Turbo";
       const isActTwo = vidModel === "Runway Act Two";
       const isAleph = vidModel === "Runway Aleph";
+      const isTopaz = vidModel === "Topaz";
       const isKling = vidModel === "Kling 2.1 Master" || vidModel === "Kling 2.0 Master" || vidModel === "Kling 1.6 Pro";
 
       if (isGen4Turbo && upstreamImages.length < 1) {
@@ -312,6 +369,11 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       }
       if (isAleph && upstreamVideos.length < 1) {
         setWarning("This model requires a video block. Please attach a video block.");
+        setIsLoading(false);
+        return;
+      }
+      if (isTopaz && upstreamVideos.length < 1) {
+        setWarning("Topaz requires a video block. Please attach a video block.");
         setIsLoading(false);
         return;
       }
@@ -343,6 +405,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           model: vidModel,
           images: upstreamImages.slice(0, 1),
           videos: upstreamVideos.slice(0, 1),
+          topazScale: vidModel === "Topaz" ? topazScale : undefined,
         }),
       });
       const json = await res.json();
@@ -387,8 +450,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       {showToolbar && (
         <div className="absolute -top-16 left-1/2 -translate-x-1/2 z-10" onMouseEnter={() => setIsToolbarHover(true)} onMouseLeave={() => setIsToolbarHover(false)} onMouseDown={(e) => { setIsToolbarHover(true); e.stopPropagation(); }} onClick={(e) => e.stopPropagation()}>
           <div ref={toolbarRef} className={`relative flex items-center gap-2 rounded-md border bg-background shadow-sm px-3 py-1.5 font-semibold ${selected || isToolbarHover || openWhich ? "opacity-100" : "opacity-70"}`}>
-            {/* Duration (hidden for Aleph since only 5s supported) */}
-            {vidModel !== "Runway Aleph" ? (
+            {/* Duration (hidden for Aleph and Topaz) */}
+            {vidModel !== "Runway Aleph" && vidModel !== "Topaz" ? (
               <div className="relative group">
                 <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "duration" ? null : "duration")); }}>
                   <span>{durationSec === 5 ? "5S" : "10S"}</span>
@@ -420,40 +483,73 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                 ) : null}
               </div>
             ) : null}
-            {/* Ratio */}
-            <div className="relative group">
-              <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
-                <span>{vidRatio === "auto" ? "Auto" : vidRatio}</span>
-                <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
-                </svg>
-              </button>
-              <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Size</div>
-              {openWhich === "ratio" ? (
-                <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[220px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                  {sizeGroups.map((group, gi) => (
-                    <div key={gi} className={gi > 0 ? "border-t border-foreground/10" : undefined}>
-                      <div className="px-3 pt-2 pb-1 text-xs text-foreground/50">{group.heading}</div>
-                      {group.options.map((opt) => (
-                        <button
-                          key={opt.value}
-                          className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
-                          onClick={() => {
-                            setVidRatio(opt.value);
-                            update?.(id, { vidRatio: opt.value });
-                            setOpenWhich(null);
-                          }}
-                        >
-                          <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.value} /></span>
-                          <span className="flex-1">{ratioLabel(opt.value)}</span>
-                          <span className="inline-flex w-4 justify-end">{vidRatio === opt.value ? "✓" : ""}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            {/* Ratio (hidden for Topaz) */}
+            {vidModel !== "Topaz" ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
+                  <span>{vidRatio === "auto" ? "Auto" : vidRatio}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Size</div>
+                {openWhich === "ratio" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[220px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {sizeGroups.map((group, gi) => (
+                      <div key={gi} className={gi > 0 ? "border-t border-foreground/10" : undefined}>
+                        <div className="px-3 pt-2 pb-1 text-xs text-foreground/50">{group.heading}</div>
+                        {group.options.map((opt) => (
+                          <button
+                            key={opt.value}
+                            className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
+                            onClick={() => {
+                              setVidRatio(opt.value);
+                              update?.(id, { vidRatio: opt.value });
+                              setOpenWhich(null);
+                            }}
+                          >
+                            <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.value} /></span>
+                            <span className="flex-1">{ratioLabel(opt.value)}</span>
+                            <span className="inline-flex w-4 justify-end">{vidRatio === opt.value ? "✓" : ""}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Topaz Scale */}
+            {vidModel === "Topaz" ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "scale" ? null : "scale")); }}>
+                  <span>{topazScale}x</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Scale</div>
+                {openWhich === "scale" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {["2", "3", "4"].map((s) => (
+                      <button
+                        key={s}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          setTopazScale(s);
+                          update?.(id, { topazVideoScale: s });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span>{s}x</span>
+                        <span className="text-xs">{topazScale === s ? "✓" : ""}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {/* Model */}
             <div className="relative group">
               <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "model" ? null : "model")); }}>
@@ -465,19 +561,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
               <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Model</div>
               {openWhich === "model" ? (
                 <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[300px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                  {[
-                    "Kling 2.1 Master",
-                    "Kling 2.0 Master",
-                    "Kling 1.6 Pro",
-                    "Veo 2",
-                    "Veo 3",
-                    "Minimax Hailuo",
-                    "Minimax Hailuo 02 Pro",
-                    "Pika",
-                    "Runway Gen 4 Turbo",
-                    "Runway Act Two",
-                    "Runway Aleph",
-                  ].map((label) => (
+                  {availableModels.map((label) => (
                     <button
                       key={label}
                       className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"

@@ -514,6 +514,13 @@ export function Studio() {
                     .filter(Boolean) as Node[];
                   return incoming.some((nn) => nn.type === "imageGenerate");
                 },
+                _hasIncomingVideoSource: (nodeId: string) => {
+                  const incoming = edges
+                    .filter((e) => e.target === nodeId)
+                    .map((e) => nodes.find((nn) => nn.id === e.source))
+                    .filter(Boolean) as Node[];
+                  return incoming.some((nn) => nn.type === "videoGenerate");
+                },
             },
           })) as unknown as Node[]}
           edges={edges}
