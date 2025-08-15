@@ -16,8 +16,11 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const resolveContextImages = (d as any)?._resolveContextImages as ((nodeId: string) => string[]) | undefined;
   const resolveContextVideos = (d as any)?._resolveContextVideos as ((nodeId: string) => string[]) | undefined;
   const initialPrompt = asString(d["prompt"], "A short looping animation of leaves swaying in the wind");
-  const initialVidRatio = asString(d["vidRatio"], "auto");
-  const initialVidModel = asString(d["vidModel"], "Kling 1.6");
+  const initialVidModel = asString(d["vidModel"], "Kling 1.6 Pro");
+  const hasIncomingImageSource = typeof (d as any)?._hasIncomingImageSource === "function" ? Boolean((d as any)?._hasIncomingImageSource(id)) : false;
+  const isInitialKling = ["Kling 2.1 Master", "Kling 2.0 Master", "Kling 1.6 Pro"].includes(initialVidModel);
+  const defaultKlingRatio = hasIncomingImageSource ? "auto" : "1:1";
+  const initialVidRatio = asString(d["vidRatio"], isInitialKling ? defaultKlingRatio : "auto");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [videoUrl, setVideoUrl] = useState<string | null>((typeof d["videoUrl"] === "string" ? (d["videoUrl"] as string) : null));
   const promptLocked = Boolean((d as any)?.promptLocked);
@@ -93,9 +96,22 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
 
   const isGen4Turbo = vidModel === "Runway Gen 4 Turbo";
   const isAleph = vidModel === "Runway Aleph";
+  const isKling = vidModel === "Kling 2.1 Master" || vidModel === "Kling 2.0 Master" || vidModel === "Kling 1.6 Pro";
   type SizeOption = { label: string; value: string };
   type SizeGroup = { heading: string; options: SizeOption[] };
   const sizeGroups: SizeGroup[] = React.useMemo(() => {
+    if (isKling) {
+      const groups: SizeGroup[] = [];
+      if (hasIncomingImageSource) {
+        groups.push({ heading: "Auto", options: [{ label: "Auto", value: "auto" }] });
+      }
+      groups.push(
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [{ label: "16:9", value: "16:9" }] },
+        { heading: "Vertical", options: [{ label: "9:16", value: "9:16" }] },
+      );
+      return groups;
+    }
     if (isGen4Turbo || isAleph) {
       return [
         { heading: "Auto", options: [{ label: "Auto", value: "auto" }] },
@@ -119,7 +135,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         { label: "9:16 (Vertical)", value: "9:16" },
       ]},
     ];
-  }, [isGen4Turbo, isAleph]);
+  }, [isKling, hasIncomingImageSource, isGen4Turbo, isAleph]);
 
   function mapFriendlyRatioToApi(value: string): string {
     switch (value) {
@@ -282,6 +298,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       const isGen4Turbo = vidModel === "Runway Gen 4 Turbo";
       const isActTwo = vidModel === "Runway Act Two";
       const isAleph = vidModel === "Runway Aleph";
+      const isKling = vidModel === "Kling 2.1 Master" || vidModel === "Kling 2.0 Master" || vidModel === "Kling 1.6 Pro";
 
       if (isGen4Turbo && upstreamImages.length < 1) {
         setWarning("This model is image-to-video only. Please attach an image block.");
@@ -301,7 +318,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
 
       setWarning("");
 
-      // Resolve API ratio, supporting Auto mapping for Gen-4 Turbo and Aleph
+      // Resolve API ratio, supporting Auto mapping for Gen-4 Turbo, Aleph and Kling i2v
       let apiRatio = mapFriendlyRatioToApi(vidRatio);
       if (apiRatio === "auto" && isGen4Turbo) {
         const imageForAuto = upstreamImages[0];
@@ -310,6 +327,10 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       if (apiRatio === "auto" && isAleph) {
         const videoForAuto = upstreamVideos[0];
         apiRatio = videoForAuto ? await pickApiRatioForAutoFromVideo(videoForAuto) : "1280:720";
+      }
+      if (apiRatio === "auto" && isKling) {
+        const imageForAuto = upstreamImages[0];
+        apiRatio = imageForAuto ? await pickApiRatioForAutoFromImage(imageForAuto) : "1280:720";
       }
 
       const res = await fetch("/api/generate-video", {
@@ -447,7 +468,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                   {[
                     "Kling 2.1 Master",
                     "Kling 2.0 Master",
-                    "Kling 1.6",
+                    "Kling 1.6 Pro",
                     "Veo 2",
                     "Veo 3",
                     "Minimax Hailuo",

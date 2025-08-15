@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import RunwayML, { type RunwayML as RunwayClient } from "@runwayml/sdk";
 import { TaskFailedError } from "@runwayml/sdk";
 import { z } from "zod";
@@ -60,23 +61,275 @@ const bodySchema = z.object({
   duration: z.union([z.literal(5), z.literal(10)]).optional().default(5),
   ratio: z.enum(AllowedVideoRatios).optional().default("1280:720"),
   model: z.enum([
+    // Kling
+    "Kling 2.1 Master",
+    "Kling 2.0 Master",
+    "Kling 1.6 Pro",
+    // Runway
     "Runway Gen 4 Turbo",
     "Runway Act Two",
     "Runway Aleph",
-  ]).optional().default("Runway Gen 4 Turbo"),
+  ]).optional().default("Kling 1.6 Pro"),
   images: z.array(z.string().min(1)).optional().default([]),
   videos: z.array(z.string().min(1)).optional().default([]),
 });
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.RUNWAYML_API_SECRET;
-    if (!apiKey) {
-      return NextResponse.json({ error: "Missing RUNWAYML_API_SECRET on server" }, { status: 500 });
+    // JWT (HS256) helper for Kling auth
+    function base64UrlEncode(input: string | Buffer): string {
+      const buf = Buffer.isBuffer(input) ? input : Buffer.from(input);
+      return buf
+        .toString("base64")
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+    }
+    function createKlingJwt(accessKey: string, secretKey: string): string {
+      const header = { alg: "HS256", typ: "JWT" } as const;
+      const now = Math.floor(Date.now() / 1000);
+      const payload = { iss: accessKey, exp: now + 1800, nbf: now - 5 } as const;
+      const encodedHeader = base64UrlEncode(JSON.stringify(header));
+      const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+      const toSign = `${encodedHeader}.${encodedPayload}`;
+      const signature = crypto.createHmac("sha256", secretKey).update(toSign).digest("base64");
+      const encodedSignature = signature.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+      return `${encodedHeader}.${encodedPayload}.${encodedSignature}`;
     }
 
     const json = await req.json();
     const { prompt, duration, ratio, model, images, videos } = bodySchema.parse(json);
+
+    // Helpers shared by all providers
+    function computeOrigin(): string {
+      const configured = process.env.PUBLIC_BASE_URL;
+      if (configured) return configured.replace(/\/$/, "");
+      const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "localhost:3000";
+      const proto = req.headers.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
+      return `${proto}://${host}`;
+    }
+    function toPublicDownloadUrlIfDataUrl(input: string, filename: string): string {
+      if (!input.startsWith("data:")) return input;
+      const origin = computeOrigin();
+      return `${origin}/api/download?url=${encodeURIComponent(input)}&filename=${encodeURIComponent(filename)}`;
+    }
+    function toPublicDownloadUrl(input: string, filename: string): string {
+      const origin = computeOrigin();
+      return `${origin}/api/download?url=${encodeURIComponent(input)}&filename=${encodeURIComponent(filename)}`;
+    }
+    function isHttpsUrl(u: string): boolean {
+      try {
+        const url = new URL(u);
+        return url.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }
+
+    // Kling integration
+    if (model === "Kling 2.1 Master" || model === "Kling 2.0 Master" || model === "Kling 1.6 Pro") {
+      const accessKey = process.env.KLING_ACCESS_KEY;
+      const secretKey = process.env.KLING_SECRET_KEY;
+      const baseUrl = (process.env.KLING_API_BASE_URL || "").replace(/\/$/, "");
+      if (!accessKey || !secretKey) {
+        return NextResponse.json({ error: "Missing KLING_ACCESS_KEY/KLING_SECRET_KEY on server" }, { status: 500 });
+      }
+      if (!baseUrl) {
+        return NextResponse.json({ error: "Missing KLING_API_BASE_URL on server" }, { status: 500 });
+      }
+
+      function mapAllowedRatioToAspectLabel(r: AllowedVideoRatio): string {
+        switch (r) {
+          case "1280:720":
+            return "16:9";
+          case "720:1280":
+            return "9:16";
+          case "1104:832":
+            return "4:3";
+          case "832:1104":
+            return "3:4";
+          case "960:960":
+            return "1:1";
+          case "1584:672":
+            return "21:9";
+          default:
+            return "16:9";
+        }
+      }
+
+      // If an input image is provided, treat as image-to-video, otherwise text-to-video
+      let promptImage = images[0];
+      if (promptImage) {
+        // Ensure HTTPS input for provider compatibility; proxy if needed
+        if (promptImage.startsWith("data:")) {
+          const origin = computeOrigin();
+          if (!origin.startsWith("https://")) {
+            return NextResponse.json({ error: "Image inputs must be HTTPS. Configure PUBLIC_BASE_URL to an https origin or provide an https URL." }, { status: 400 });
+          }
+          promptImage = toPublicDownloadUrlIfDataUrl(promptImage, "image.png");
+        } else if (promptImage.startsWith("http://")) {
+          const origin = computeOrigin();
+          if (!origin.startsWith("https://")) {
+            return NextResponse.json({ error: "Image inputs must be HTTPS. Configure PUBLIC_BASE_URL to an https origin or provide an https URL." }, { status: 400 });
+          }
+          promptImage = toPublicDownloadUrl(promptImage, "image.png");
+        } else if (!isHttpsUrl(promptImage)) {
+          return NextResponse.json({ error: "Unsupported image URL scheme" }, { status: 400 });
+        }
+      }
+
+      function mapUiModelToKlingId(label: string): string {
+        switch (label) {
+          case "Kling 2.1 Master":
+            return "kling-v2-1-master";
+          case "Kling 2.0 Master":
+            return "kling-v2-master";
+          case "Kling 1.6 Pro":
+          default:
+            return "kling-v1-6";
+        }
+      }
+
+      const klingModel = mapUiModelToKlingId(model);
+      const aspectRaw = mapAllowedRatioToAspectLabel(ratio);
+      const allowedAspects = new Set(["16:9", "9:16", "1:1"]);
+      const aspect = allowedAspects.has(aspectRaw) ? aspectRaw : "16:9";
+      const isImageToVideo = Boolean(promptImage);
+
+      // Build payloads expected by Kling endpoints (use model_name per docs; duration as string)
+      const createPayload: Record<string, unknown> = isImageToVideo
+        ? {
+            model_name: klingModel,
+            prompt,
+            aspect_ratio: aspect,
+            duration: String(duration as 5 | 10),
+            image_url: promptImage,
+            mode: "pro",
+          }
+        : {
+            model_name: klingModel,
+            prompt,
+            aspect_ratio: aspect,
+            duration: String(duration as 5 | 10),
+            mode: "pro",
+          };
+
+      // Endpoint selection with env overrides
+      const t2vPath = (process.env.KLING_T2V_PATH || "/v1/videos/text2video").replace(/\/$/, "");
+      const i2vPath = (process.env.KLING_I2V_PATH || "/v1/videos/image2video").replace(/\/$/, "");
+      const createPath = isImageToVideo ? i2vPath : t2vPath;
+      const createUrl = `${baseUrl}${createPath}`;
+      const klingJwt = createKlingJwt(accessKey, secretKey);
+      const createResp = await fetch(createUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Kling expects JWT Bearer per docs
+          Authorization: `Bearer ${klingJwt}`,
+        } as any,
+        body: JSON.stringify(createPayload),
+      });
+      const createText = await createResp.text();
+      if (!createResp.ok) {
+        return NextResponse.json({ error: `Kling task create failed: ${createResp.status}`, details: createText }, { status: 502 });
+      }
+      let createData: any;
+      try {
+        createData = JSON.parse(createText);
+      } catch {
+        return NextResponse.json({ error: "Invalid JSON from Kling (create)", raw: createText }, { status: 502 });
+      }
+      const taskId: string | undefined = createData?.task_id || createData?.data?.task_id || createData?.id;
+      const hintedStatusUrl: string | undefined =
+        createData?.status_url ||
+        createData?.data?.status_url ||
+        createData?.task_url ||
+        createData?.data?.task_url ||
+        createData?.result_url ||
+        createData?.data?.result_url;
+      if (!taskId) {
+        return NextResponse.json({ error: "Kling create missing task_id", raw: createData }, { status: 502 });
+      }
+
+      // Derive status URL: prefer returned URL; otherwise try env template; otherwise probe common patterns
+      const deriveStatusUrl = async (): Promise<string> => {
+        if (hintedStatusUrl && /^https?:\/\//i.test(hintedStatusUrl)) return hintedStatusUrl;
+        const authHeader = { Authorization: `Bearer ${klingJwt}` } as any;
+        const tmpl = process.env.KLING_STATUS_PATH || "/v1/videos/tasks/{task_id}";
+        const fromEnv = `${baseUrl}${tmpl.replace("{task_id}", encodeURIComponent(taskId))}`;
+        const candidates: string[] = [
+          fromEnv,
+          `${baseUrl}/v1/videos/task/${encodeURIComponent(taskId)}`,
+          `${baseUrl}/v1/videos/tasks?task_id=${encodeURIComponent(taskId)}`,
+          `${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`,
+          `${baseUrl}/v1/videos/text2video/${encodeURIComponent(taskId)}`,
+          `${baseUrl}/v1/videos/image2video/${encodeURIComponent(taskId)}`,
+        ];
+        for (const url of candidates) {
+          try {
+            const resp = await fetch(url, { method: "GET", headers: authHeader });
+            if (resp.ok) return url;
+          } catch {
+            // ignore and try next
+          }
+        }
+        return fromEnv; // fallback to env even if not confirmed
+      };
+
+      const statusUrl = await deriveStatusUrl();
+      const startedAt = Date.now();
+      const timeoutMs = 15 * 60 * 1000; // 15 minutes – Kling jobs can run longer
+      let lastStatus: any = null;
+      let attempt = 0;
+      for (;;) {
+        if (Date.now() - startedAt > timeoutMs) {
+          return NextResponse.json({ error: "Kling task timed out", details: lastStatus }, { status: 504 });
+        }
+        const sResp = await fetch(statusUrl, {
+          headers: {
+            Authorization: `Bearer ${klingJwt}`,
+          } as any,
+        });
+        const sText = await sResp.text();
+        if (!sResp.ok) {
+          return NextResponse.json({ error: `Kling status failed: ${sResp.status}`, details: sText }, { status: 502 });
+        }
+        let sData: any;
+        try {
+          sData = JSON.parse(sText);
+        } catch {
+          return NextResponse.json({ error: "Invalid JSON from Kling (status)", raw: sText }, { status: 502 });
+        }
+        lastStatus = sData;
+
+        const state: string | undefined =
+          sData?.data?.task_status || sData?.task_status || sData?.status || sData?.data?.status;
+        if (state && ["succeed", "succeeded", "finished", "success", "completed"].includes(state.toLowerCase())) {
+          // Extract first video URL from common Kling shapes
+          const urlCandidates: Array<string | undefined> = [
+            sData?.data?.task_result?.videos?.[0]?.url,
+            sData?.task_result?.videos?.[0]?.url,
+            sData?.result?.video_url,
+            sData?.data?.result?.video_url,
+            sData?.data?.output?.[0],
+            sData?.output?.[0],
+            sData?.url,
+            sData?.data?.url,
+          ];
+          const url = urlCandidates.find((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u));
+          return NextResponse.json({ url });
+        }
+        if (state && ["failed", "error", "canceled", "cancelled"].includes(state.toLowerCase())) {
+          return NextResponse.json({ error: "Kling task failed", details: sData }, { status: 502 });
+        }
+        // Use slower backoff while processing per docs (avoid rate limits)
+        const delay = state && state.toLowerCase() === "processing"
+          ? Math.min(15000, 3000 + attempt * 1000)
+          : Math.min(10000, 2000 + attempt * 500);
+        attempt++;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
 
     function toFetchableUrl(input: string | undefined): string | undefined {
       if (!input) return undefined;
@@ -84,9 +337,7 @@ export async function POST(req: NextRequest) {
       return input;
     }
 
-    const client: RunwayClient = new RunwayML({ apiKey });
-
-    async function uploadAssetFromInput(input: string): Promise<string> {
+    async function uploadAssetFromInput(client: RunwayClient, input: string): Promise<string> {
       try {
         let mime = "application/octet-stream";
         let buf: Buffer | null = null;
@@ -118,40 +369,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    function computeOrigin(): string {
-      const configured = process.env.PUBLIC_BASE_URL;
-      if (configured) return configured.replace(/\/$/, "");
-      const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "localhost:3000";
-      const proto = req.headers.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
-      return `${proto}://${host}`;
-    }
+    // Runway integration starts here
+    const runwayApiKey = process.env.RUNWAYML_API_SECRET;
 
-    function toPublicDownloadUrlIfDataUrl(input: string, filename: string): string {
-      if (!input.startsWith("data:")) return input;
-      const origin = computeOrigin();
-      return `${origin}/api/download?url=${encodeURIComponent(input)}&filename=${encodeURIComponent(filename)}`;
+    // If using Runway models below, ensure key is present
+    if ((model?.startsWith && model.startsWith("Runway ")) && !runwayApiKey) {
+      return NextResponse.json({ error: "Missing RUNWAYML_API_SECRET on server" }, { status: 500 });
     }
-
-    function toPublicDownloadUrl(input: string, filename: string): string {
-      const origin = computeOrigin();
-      return `${origin}/api/download?url=${encodeURIComponent(input)}&filename=${encodeURIComponent(filename)}`;
-    }
-
-    function isHttpsUrl(u: string): boolean {
-      try {
-        const url = new URL(u);
-        return url.protocol === "https:";
-      } catch {
-        return false;
-      }
-    }
+    const client: RunwayClient = new RunwayML({ apiKey: runwayApiKey ?? "" });
 
     async function ensureHttpsAssetUrl(input: string, filename: string): Promise<string | null> {
       // If already HTTPS, accept as-is
       if (typeof input === "string" && input.startsWith("https://")) return input;
 
       // Try uploading to Runway assets first
-      const uploaded = await uploadAssetFromInput(input);
+      const uploaded = await uploadAssetFromInput(client, input);
       if (uploaded && isHttpsUrl(uploaded)) return uploaded;
 
       // If data URL, fall back to proxy if origin is HTTPS
