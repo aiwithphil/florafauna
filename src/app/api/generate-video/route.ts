@@ -57,7 +57,8 @@ function mapRatioForTextImage(ratio: AllowedVideoRatio): TIAllowedRatio {
 }
 
 const bodySchema = z.object({
-  prompt: z.string().min(1),
+  // Allow empty prompt; some providers (Kling) can run without text
+  prompt: z.string().optional().default(""),
   duration: z.union([z.literal(5), z.literal(10)]).optional().default(5),
   ratio: z.enum(AllowedVideoRatios).optional().default("1280:720"),
   model: z.enum([
@@ -161,22 +162,28 @@ export async function POST(req: NextRequest) {
 
       // If an input image is provided, treat as image-to-video, otherwise text-to-video
       let promptImage = images[0];
+      let tailImage = images[1];
       if (promptImage) {
-        // Ensure HTTPS input for provider compatibility; proxy if needed
+        // Ensure fetchable URL for provider; proxy if needed. Prefer HTTPS when available but do not hard-fail in dev.
         if (promptImage.startsWith("data:")) {
-          const origin = computeOrigin();
-          if (!origin.startsWith("https://")) {
-            return NextResponse.json({ error: "Image inputs must be HTTPS. Configure PUBLIC_BASE_URL to an https origin or provide an https URL." }, { status: 400 });
-          }
           promptImage = toPublicDownloadUrlIfDataUrl(promptImage, "image.png");
         } else if (promptImage.startsWith("http://")) {
-          const origin = computeOrigin();
-          if (!origin.startsWith("https://")) {
-            return NextResponse.json({ error: "Image inputs must be HTTPS. Configure PUBLIC_BASE_URL to an https origin or provide an https URL." }, { status: 400 });
-          }
+          // Proxy plain HTTP via our download route so the provider can fetch consistently
           promptImage = toPublicDownloadUrl(promptImage, "image.png");
-        } else if (!isHttpsUrl(promptImage)) {
-          return NextResponse.json({ error: "Unsupported image URL scheme" }, { status: 400 });
+        } else if (!/^https?:\/\//i.test(promptImage)) {
+          // If a relative path or unknown scheme sneaks in, make it absolute via our origin
+          const origin = computeOrigin();
+          promptImage = `${origin}${promptImage.startsWith("/") ? "" : "/"}${promptImage}`;
+        }
+      }
+      if (tailImage) {
+        if (tailImage.startsWith("data:")) {
+          tailImage = toPublicDownloadUrlIfDataUrl(tailImage, "image_tail.png");
+        } else if (tailImage.startsWith("http://")) {
+          tailImage = toPublicDownloadUrl(tailImage, "image_tail.png");
+        } else if (!/^https?:\/\//i.test(tailImage)) {
+          const origin = computeOrigin();
+          tailImage = `${origin}${tailImage.startsWith("/") ? "" : "/"}${tailImage}`;
         }
       }
 
@@ -199,18 +206,23 @@ export async function POST(req: NextRequest) {
       const isImageToVideo = Boolean(promptImage);
 
       // Build payloads expected by Kling endpoints (use model_name per docs; duration as string)
+      // Kling accepts empty or missing prompt; send single space when empty to be safe
+      const safePrompt = (prompt && String(prompt).trim().length > 0) ? prompt : " ";
+
       const createPayload: Record<string, unknown> = isImageToVideo
         ? {
             model_name: klingModel,
-            prompt,
+            prompt: safePrompt,
             aspect_ratio: aspect,
             duration: String(duration as 5 | 10),
-            image_url: promptImage,
+            // Kling i2v expects `image` (and optional `image_tail`)
+            image: promptImage,
+            ...(tailImage ? { image_tail: tailImage } : {}),
             mode: "pro",
           }
         : {
             model_name: klingModel,
-            prompt,
+            prompt: safePrompt,
             aspect_ratio: aspect,
             duration: String(duration as 5 | 10),
             mode: "pro",

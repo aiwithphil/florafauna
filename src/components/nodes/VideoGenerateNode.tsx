@@ -403,7 +403,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           duration: durationSec,
           ratio: apiRatio,
           model: vidModel,
-          images: upstreamImages.slice(0, 1),
+          // For Kling i2v, support optional end frame via second connected image
+          images: isKling ? upstreamImages.slice(0, 2) : upstreamImages.slice(0, 1),
           videos: upstreamVideos.slice(0, 1),
           topazScale: vidModel === "Topaz" ? topazScale : undefined,
         }),
