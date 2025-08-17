@@ -75,6 +75,13 @@ const bodySchema = z.object({
   images: z.array(z.string().min(1)).optional().default([]),
   videos: z.array(z.string().min(1)).optional().default([]),
   topazScale: z.union([z.literal("2"), z.literal("3"), z.literal("4")]).optional(),
+  // Optional Topaz source/output hints from client probing
+  topazSourceWidth: z.number().int().positive().optional(),
+  topazSourceHeight: z.number().int().positive().optional(),
+  topazSourceDuration: z.number().positive().optional(),
+  topazSourceFrameRate: z.number().positive().optional(),
+  topazOutputWidth: z.number().int().positive().optional(),
+  topazOutputHeight: z.number().int().positive().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -101,7 +108,7 @@ export async function POST(req: NextRequest) {
     }
 
     const json = await req.json();
-    const { prompt, duration, ratio, model, images, videos, topazScale } = bodySchema.parse(json);
+    const { prompt, duration, ratio, model, images, videos, topazScale, topazSourceWidth, topazSourceHeight, topazSourceDuration, topazSourceFrameRate, topazOutputWidth, topazOutputHeight } = bodySchema.parse(json);
 
     // Helpers shared by all providers
     function computeOrigin(): string {
@@ -511,35 +518,90 @@ export async function POST(req: NextRequest) {
     }
 
     if (model === "Topaz") {
-      // Requires one video input; optionally use scale to influence output resolution
+      // Topaz flow per docs: https://developer.topazlabs.com/
       const promptVideo = videos[0];
       if (!promptVideo) {
         return NextResponse.json({ error: "Topaz requires a video input" }, { status: 400 });
       }
-      // For Topaz, compute output size from scale if possible; if ratio is known, we may ignore here
-      let outputWidth: number | undefined;
-      let outputHeight: number | undefined;
+      // Fetch source FIRST so we can provide required source fields on create
+      const srcRes = await fetch(promptVideo);
+      if (!srcRes.ok) return NextResponse.json({ error: `Failed to fetch source video: ${srcRes.status}` }, { status: 502 });
+      const srcType = srcRes.headers.get("content-type") || "video/mp4";
+      const srcBuf = Buffer.from(await srcRes.arrayBuffer());
+
+      // 1) Create
       const desiredScale = Number(topazScale || 2);
-      try {
-        // We cannot probe dimensions server-side reliably without fetching; Topaz can infer. Keep undefined.
-      } catch {}
-      const origin = computeOrigin();
-      const proxyVideo = promptVideo.startsWith("data:") ? promptVideo : toPublicDownloadUrl(promptVideo, "video.mp4");
-      const topazResp = await fetch(`${origin}/api/generate-video/topaz`, {
+      const outputWidth: number | undefined = typeof topazOutputWidth === "number" ? topazOutputWidth : (typeof topazSourceWidth === "number" ? Math.round(topazSourceWidth * Math.max(2, Math.min(4, desiredScale))) : undefined);
+      const outputHeight: number | undefined = typeof topazOutputHeight === "number" ? topazOutputHeight : (typeof topazSourceHeight === "number" ? Math.round(topazSourceHeight * Math.max(2, Math.min(4, desiredScale))) : undefined);
+      const apiKey = process.env.TOPAZ_API_KEY;
+      if (!apiKey) return NextResponse.json({ error: "Missing TOPAZ_API_KEY on server" }, { status: 500 });
+      const createResp = await fetch("https://api.topazlabs.com/video/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", accept: "application/json", "X-API-Key": apiKey },
         body: JSON.stringify({
-          video: proxyVideo,
-          output_width: outputWidth,
-          output_height: outputHeight,
-          scale: String(desiredScale),
+          // Required source metadata at create time
+          source: {
+            container: "mp4",
+            size: Math.max(1, srcBuf.length),
+            duration: typeof topazSourceDuration === "number" && topazSourceDuration > 0 ? Math.round(topazSourceDuration) : 5,
+            frameRate: typeof topazSourceFrameRate === "number" && topazSourceFrameRate > 0 ? Math.round(topazSourceFrameRate) : 30,
+            frameCount: (() => {
+              const fr = typeof topazSourceFrameRate === "number" && topazSourceFrameRate > 0 ? Math.round(topazSourceFrameRate) : 30;
+              const du = typeof topazSourceDuration === "number" && topazSourceDuration > 0 ? Math.round(topazSourceDuration) : 5;
+              return Math.max(1, fr * du);
+            })(),
+            resolution: {
+              width: typeof topazSourceWidth === "number" && topazSourceWidth > 0 ? topazSourceWidth : (outputWidth ?? 1280),
+              height: typeof topazSourceHeight === "number" && topazSourceHeight > 0 ? topazSourceHeight : (outputHeight ?? 720),
+            },
+          },
+          output: {
+            resolution: outputWidth && outputHeight ? { width: outputWidth, height: outputHeight } : undefined,
+            frameRate: 30,
+            audioTransfer: "Copy",
+            audioCodec: "AAC",
+            dynamicCompressionLevel: "Low",
+            container: "mp4",
+          },
+          filters: [{ model: "iris-3" }],
         }),
       });
-      const topazJson = await topazResp.json();
-      if (!topazResp.ok) {
-        return NextResponse.json({ error: topazJson?.error || "Topaz failed", details: topazJson }, { status: 502 });
+      const createText = await createResp.text();
+      if (!createResp.ok) return NextResponse.json({ error: `Topaz create failed: ${createResp.status}`, details: createText }, { status: 502 });
+      let createData: any; try { createData = JSON.parse(createText); } catch { createData = {}; }
+      const videoId: string | undefined = createData?.id || createData?.requestId || createData?.data?.id;
+      if (!videoId) return NextResponse.json({ error: "Topaz create missing video id", raw: createData }, { status: 502 });
+
+      // 2) Accept
+      const acceptResp = await fetch(`https://api.topazlabs.com/video/${encodeURIComponent(videoId)}/accept`, {
+        method: "PATCH",
+        headers: { accept: "application/json", "X-API-Key": apiKey },
+      });
+      const acceptText = await acceptResp.text();
+      if (!acceptResp.ok) return NextResponse.json({ error: `Topaz accept failed: ${acceptResp.status}`, details: acceptText }, { status: 502 });
+      let acceptData: any; try { acceptData = JSON.parse(acceptText); } catch { acceptData = {}; }
+      const uploadUrl: string | undefined = acceptData?.uploadUrl || acceptData?.data?.uploadUrl || acceptData?.uploadUrls?.[0]?.url || acceptData?.urls?.[0];
+      if (!uploadUrl) return NextResponse.json({ error: "Topaz accept missing upload URL", raw: acceptData }, { status: 502 });
+
+      // 3) Upload the source video bytes to the signed S3 URL (reuse buffer)
+      const putResp = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": srcType }, body: srcBuf });
+      if (!putResp.ok) {
+        const t = await putResp.text().catch(() => "");
+        return NextResponse.json({ error: `Topaz upload failed: ${putResp.status}`, details: t }, { status: 502 });
       }
-      return NextResponse.json({ url: topazJson?.url });
+      const eTag = putResp.headers.get("etag") || putResp.headers.get("ETag") || "";
+
+      // 4) Complete upload
+      const completeResp = await fetch(`https://api.topazlabs.com/video/${encodeURIComponent(videoId)}/complete-upload`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", accept: "application/json", "X-API-Key": apiKey },
+        body: JSON.stringify({ uploadResults: [{ partNum: 1, eTag }] }),
+      });
+      const completeText = await completeResp.text();
+      if (!completeResp.ok) return NextResponse.json({ error: `Topaz complete-upload failed: ${completeResp.status}`, details: completeText }, { status: 502 });
+
+      // 5) Return job id for client-side polling to avoid long server holds
+      return NextResponse.json({ jobId: videoId });
     }
 
     return NextResponse.json({ error: "Unsupported model" }, { status: 400 });

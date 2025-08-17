@@ -291,6 +291,32 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
     }
   }
 
+  async function getVideoDuration(src: string): Promise<number | null> {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return await new Promise((resolve) => {
+        const video = document.createElement("video");
+        let url = src;
+        try {
+          const isData = src.startsWith("data:");
+          const isHttp = src.startsWith("http://") || src.startsWith("https://");
+          if (!isData && isHttp) {
+            url = `/api/download?url=${encodeURIComponent(src)}&filename=probe.mp4`;
+          }
+        } catch {}
+        video.preload = "metadata";
+        video.onloadedmetadata = () => {
+          const d = Number((video as any).duration) || 0;
+          resolve(Number.isFinite(d) && d > 0 ? d : null);
+        };
+        video.onerror = () => resolve(null);
+        video.src = url;
+      });
+    } catch {
+      return null;
+    }
+  }
+
   async function pickApiRatioForAutoFromVideo(src: string): Promise<string> {
     const dims = await getVideoNaturalSize(src);
     if (!dims || dims.width <= 0 || dims.height <= 0) return "1280:720";
@@ -400,18 +426,52 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         apiRatio = imageForAuto ? await pickApiRatioForAutoFromImage(imageForAuto) : "1280:720";
       }
 
+      // Pre-compute Topaz source and output metadata client-side when possible
+      let topazMeta: undefined | {
+        sourceWidth?: number;
+        sourceHeight?: number;
+        sourceDuration?: number;
+        sourceFrameRate?: number;
+        outputWidth?: number;
+        outputHeight?: number;
+      };
+      if (isTopaz && upstreamVideos[0]) {
+        const src = upstreamVideos[0];
+        const dims = await getVideoNaturalSize(src);
+        const dur = await getVideoDuration(src);
+        const s = Math.max(2, Math.min(4, Number(topazScale) || 2));
+        topazMeta = {
+          sourceWidth: dims?.width,
+          sourceHeight: dims?.height,
+          sourceDuration: dur ?? undefined,
+          sourceFrameRate: 30, // best-effort default when fps is unknown
+          outputWidth: dims && Math.round(dims.width * s),
+          outputHeight: dims && Math.round(dims.height * s),
+        };
+      }
+
       const res = await fetch("/api/generate-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: effectivePrompt,
+          ...(vidModel !== "Topaz" ? { prompt: effectivePrompt } : {}),
           duration: durationSec,
-          ratio: apiRatio,
+          ...(vidModel !== "Topaz" ? { ratio: apiRatio } : {}),
           model: vidModel,
           // For Kling i2v, support optional end frame via second connected image
           images: isKling ? upstreamImages.slice(0, 2) : upstreamImages.slice(0, 1),
           videos: upstreamVideos.slice(0, 1),
           topazScale: vidModel === "Topaz" ? topazScale : undefined,
+          ...(topazMeta && vidModel === "Topaz"
+            ? {
+                topazSourceWidth: topazMeta.sourceWidth,
+                topazSourceHeight: topazMeta.sourceHeight,
+                topazSourceDuration: topazMeta.sourceDuration,
+                topazSourceFrameRate: topazMeta.sourceFrameRate,
+                topazOutputWidth: topazMeta.outputWidth,
+                topazOutputHeight: topazMeta.outputHeight,
+              }
+            : {}),
         }),
       });
       const json = await res.json();
@@ -423,6 +483,28 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       if (json.url) {
         setVideoUrl(json.url);
         update?.(id, { videoUrl: json.url });
+      } else if (json.jobId && vidModel === "Topaz") {
+        // Poll status endpoint until ready
+        const jobId = json.jobId as string;
+        const started = Date.now();
+        const timeout = 30 * 60 * 1000;
+        for (;;) {
+          if (Date.now() - started > timeout) { setError("Topaz job timed out"); break; }
+          await new Promise((r) => setTimeout(r, 2000));
+          const s = await fetch(`/api/generate-video/topaz?status=1&id=${encodeURIComponent(jobId)}`);
+          const sj = await s.json();
+          if (sj?.failed) { setError("Topaz job failed"); break; }
+          if (sj?.done && (sj?.url || sj?.download?.url)) {
+            const finalUrl = sj?.url || sj?.download?.url;
+            setVideoUrl(finalUrl);
+            update?.(id, { videoUrl: finalUrl });
+            break;
+          }
+          // If provider returns state=complete but no URL yet, keep polling briefly longer
+          if (sj?.state && String(sj.state).toLowerCase() === "complete" && !sj?.url) {
+            continue;
+          }
+        }
       }
     } finally {
       setIsLoading(false);
@@ -587,68 +669,74 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                 </div>
               ) : null}
             </div>
-            {/* Enhance prompt */}
-            <div className="relative group">
-              <button
-                className="text-xs px-2 py-1 rounded hover:bg-foreground/10 disabled:opacity-60"
-                title="Enhance prompt"
-                disabled={isEnhancing}
-                onClick={async () => {
-                  try {
-                    setIsEnhancing(true);
-                    const instruction =
-                      "You are an AI prompt enhancer for text-to-video generation. Take the user’s raw prompt and rewrite it into a cinematic, highly descriptive sequence that preserves the original concept but maximizes realism, coherence, and visual storytelling. Include camera movement, scene transitions, shot types, lighting, pacing, and environmental details. Use vivid language to describe motion, atmosphere, and mood. Keep it suitable for continuous video flow, avoiding static or unrelated scenes. Output only the final enhanced prompt and nothing else.";
-                    const composed = `${instruction}\n\nRaw prompt:\n"""\n${prompt}\n"""`;
-                    const res = await fetch("/api/generate-text", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ prompt: composed }),
-                    });
-                    const json = await res.json();
-                    const enhancedPrompt = sanitizeEnhancedPrompt(json?.text ?? "");
-                    if (enhancedPrompt) {
-                      setPrompt(enhancedPrompt);
-                      update?.(id, { prompt: enhancedPrompt });
+            {/* Enhance prompt (hidden for Topaz) */}
+            {vidModel !== "Topaz" ? (
+              <div className="relative group">
+                <button
+                  className="text-xs px-2 py-1 rounded hover:bg-foreground/10 disabled:opacity-60"
+                  title="Enhance prompt"
+                  disabled={isEnhancing}
+                  onClick={async () => {
+                    try {
+                      setIsEnhancing(true);
+                      const instruction =
+                        "You are an AI prompt enhancer for text-to-video generation. Take the user’s raw prompt and rewrite it into a cinematic, highly descriptive sequence that preserves the original concept but maximizes realism, coherence, and visual storytelling. Include camera movement, scene transitions, shot types, lighting, pacing, and environmental details. Use vivid language to describe motion, atmosphere, and mood. Keep it suitable for continuous video flow, avoiding static or unrelated scenes. Output only the final enhanced prompt and nothing else.";
+                      const composed = `${instruction}\n\nRaw prompt:\n"""\n${prompt}\n"""`;
+                      const res = await fetch("/api/generate-text", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ prompt: composed }),
+                      });
+                      const json = await res.json();
+                      const enhancedPrompt = sanitizeEnhancedPrompt(json?.text ?? "");
+                      if (enhancedPrompt) {
+                        setPrompt(enhancedPrompt);
+                        update?.(id, { prompt: enhancedPrompt });
+                      }
+                    } finally {
+                      setIsEnhancing(false);
                     }
-                  } finally {
-                    setIsEnhancing(false);
-                  }
-                }}
-              >
-                {isEnhancing ? "…" : "✨"}
-              </button>
-              <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Enhance Prompt</div>
-            </div>
+                  }}
+                >
+                  {isEnhancing ? "…" : "✨"}
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Enhance Prompt</div>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
       <div className="px-3 py-2 border-b text-sm font-semibold">Video Generate</div>
       <div className="p-3 space-y-2">
-        <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}</label>
-        <textarea
-          value={prompt}
-          onChange={(e) => {
-            if (promptLocked) return;
-            const v = e.target.value;
-            setPrompt(v);
-            update?.(id, { prompt: v });
-          }}
-          className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
-          placeholder="Enter prompt"
-          readOnly={promptLocked}
-          draggable={false}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerMove={(e) => e.stopPropagation()}
-          onPointerUp={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onMouseMove={(e) => e.stopPropagation()}
-          onMouseUp={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-          onDragStart={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          onTouchEnd={(e) => e.stopPropagation()}
-        />
+        {vidModel !== "Topaz" ? (
+          <>
+            <label className="text-xs font-medium">Prompt {promptLocked ? <span className="text-[10px] ml-1 text-foreground/60">(from linked text)</span> : null}</label>
+            <textarea
+              value={prompt}
+              onChange={(e) => {
+                if (promptLocked) return;
+                const v = e.target.value;
+                setPrompt(v);
+                update?.(id, { prompt: v });
+              }}
+              className="w-full h-20 p-2 text-sm rounded border bg-transparent nodrag"
+              placeholder="Enter prompt"
+              readOnly={promptLocked}
+              draggable={false}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerMove={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onMouseMove={(e) => e.stopPropagation()}
+              onMouseUp={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onDragStart={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+              onTouchEnd={(e) => e.stopPropagation()}
+            />
+          </>
+        ) : null}
         <div className="flex items-center gap-2">
           <button
             onClick={run}
