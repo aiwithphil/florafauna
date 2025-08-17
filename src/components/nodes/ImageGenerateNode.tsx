@@ -17,7 +17,9 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const countIncomingImages = (d as any)?._countIncomingImages as ((nodeId: string) => number) | undefined;
   const resolveContextImages = (d as any)?._resolveContextImages as ((nodeId: string) => string[]) | undefined;
   const initialPrompt = asString(d["prompt"], "A watercolor painting of a fern in a misty forest");
-  const initialImgRatio = asString(d["imgRatio"], "1:1");
+  // Default to Auto for image-to-image (when an input image is connected); otherwise 1:1
+  const defaultImgRatio = Boolean(hasIncomingImageSource?.(id)) ? "auto" : "1:1";
+  const initialImgRatio = asString(d["imgRatio"], defaultImgRatio);
   const initialImgRatioApplied = asString((d as any)?.imgRatioApplied, initialImgRatio);
   const initialImgModel = asString(d["imgModel"], "GPT Image");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
@@ -98,6 +100,15 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       }
     }
   }, [isImageToImage, imgModel, imageToImageModels, textToImageModels, id, update]);
+
+  // When switching into image-to-image, prefer "auto" if we were still on the old default (1:1)
+  useEffect(() => {
+    if (isImageToImage && imgRatioSelected === "1:1") {
+      setImgRatioSelected("auto");
+      if (!imageUrl) setImgRatioApplied("auto");
+      update?.(id, { imgRatio: "auto", imgRatioSelected: "auto", ...(imageUrl ? {} : { imgRatioApplied: "auto" }) });
+    }
+  }, [isImageToImage]);
   function sanitizeEnhancedPrompt(text: string): string {
     let s = (text ?? "").trim();
     s = s.replace(/^\s*(\*\*)?\s*Enhanced Prompt:?\s*(\*\*)?\s*\n*/i, "");
