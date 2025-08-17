@@ -16,6 +16,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const resolveContextImages = (d as any)?._resolveContextImages as ((nodeId: string) => string[]) | undefined;
   const resolveContextVideos = (d as any)?._resolveContextVideos as ((nodeId: string) => string[]) | undefined;
   const hasIncomingVideoSource = typeof (d as any)?._hasIncomingVideoSource === "function" ? Boolean((d as any)?._hasIncomingVideoSource(id)) : false;
+  const countIncomingImages = typeof (d as any)?._countIncomingImages === "function" ? Number((d as any)?._countIncomingImages(id)) : 0;
   const initialPrompt = asString(d["prompt"], "A short looping animation of leaves swaying in the wind");
   // Default model should be the first available for current context
   const initialAvailableModels = hasIncomingVideoSource
@@ -123,6 +124,10 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
 
   // Determine available models for the current context (e.g., when a video is attached)
   const availableModels = React.useMemo(() => {
+    // If two images are connected, only Kling 1.6 Pro supports end frame (tail)
+    if (!hasIncomingVideoSource && countIncomingImages >= 2) {
+      return ["Kling 1.6 Pro"] as const as string[];
+    }
     return hasIncomingVideoSource
       ? [
           "Runway Act Two",
@@ -142,7 +147,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           "Runway Act Two",
           "Runway Aleph",
         ];
-  }, [hasIncomingVideoSource]);
+  }, [hasIncomingVideoSource, countIncomingImages]);
 
   // If the current model is not valid for the context, default to the first available option
   useEffect(() => {

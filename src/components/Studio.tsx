@@ -82,6 +82,17 @@ export function Studio() {
           return;
         }
       }
+      // Enforce maximum of 2 incoming images per video block (supports Kling end frame)
+      const isImageToVideo = (sourceNode?.type === "imageGenerate") && (targetNode?.type === "videoGenerate");
+      if (isImageToVideo) {
+        const incomingImagesToVideo = edges
+          .filter((e) => e.target === connection.target)
+          .map((e) => nodes.find((n) => n.id === e.source))
+          .filter((n): n is Node => Boolean(n) && n!.type === "imageGenerate");
+        if (incomingImagesToVideo.length >= 2) {
+          return;
+        }
+      }
       const isTextToMedia = (sourceNode?.type === "textGenerate") && (targetNode?.type === "imageGenerate" || targetNode?.type === "videoGenerate");
       if (isTextToMedia) {
         const alreadyHasText = edges.some((e) => e.target === connection.target && nodes.find((n) => n.id === e.source)?.type === "textGenerate");
