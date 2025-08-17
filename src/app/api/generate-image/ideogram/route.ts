@@ -18,7 +18,8 @@ const AllowedRatios = [
   "1:3",
 ] as const;
 
-const AllowedSpeeds = ["DEFAULT", "TURBO"] as const;
+const AllowedSpeeds = ["DEFAULT", "TURBO", "QUALITY"] as const;
+const AllowedStyleTypes = ["AUTO", "REALISTIC", "FICTION"] as const;
 
 const bodySchema = z.object({
   // Allow empty prompt for character reference i2i
@@ -26,8 +27,10 @@ const bodySchema = z.object({
   ratio: z.enum(AllowedRatios).optional().default("1:1"),
   // Up to 2 character reference images (URL or data URL)
   characterImages: z.array(z.string().min(1)).max(2).optional().default([]),
-  // Optional rendering speed
-  renderingSpeed: z.enum(AllowedSpeeds).optional().default("DEFAULT"),
+  // Optional rendering speed; when omitted and using character i2i, we'll prefer TURBO by default
+  renderingSpeed: z.enum(AllowedSpeeds).optional(),
+  // Optional style type for Ideogram Character generations
+  styleType: z.enum(AllowedStyleTypes).optional(),
 });
 
 async function toBlobFromUrlOrDataUrl(input: string): Promise<Blob> {
@@ -53,7 +56,7 @@ async function toBlobFromUrlOrDataUrl(input: string): Promise<Blob> {
 export async function POST(req: NextRequest) {
   try {
     const json = await req.json();
-    const { prompt, ratio, characterImages, renderingSpeed } = bodySchema.parse(json);
+    const { prompt, ratio, characterImages, renderingSpeed, styleType } = bodySchema.parse(json);
 
     const apiKey = process.env.IDEOGRAM_API_KEY;
     if (!apiKey) {
@@ -73,12 +76,16 @@ export async function POST(req: NextRequest) {
       formData.set("aspect_ratio", toIdeogramAspect(ratio));
     }
     formData.set("num_images", "1");
-    if (renderingSpeed && renderingSpeed !== "DEFAULT") {
-      formData.set("rendering_speed", renderingSpeed);
+    // Prefer TURBO for character reference img2img when client does not specify; respect explicit choices including DEFAULT and QUALITY
+    const hasCharacterRefs = Array.isArray(characterImages) && characterImages.length > 0;
+    const effectiveRenderingSpeed = hasCharacterRefs
+      ? (renderingSpeed ?? "TURBO")
+      : (renderingSpeed ?? "DEFAULT");
+    if (effectiveRenderingSpeed && effectiveRenderingSpeed !== "DEFAULT") {
+      formData.set("rendering_speed", effectiveRenderingSpeed);
     }
 
     if (characterImages && characterImages.length > 0) {
-      formData.set("style_type", "AUTO");
       let index = 0;
       for (const src of characterImages) {
         const blob = await toBlobFromUrlOrDataUrl(src);
@@ -89,6 +96,12 @@ export async function POST(req: NextRequest) {
           : "bin";
         formData.append("character_reference_images", blob, `character_${index++}.${ext}`);
       }
+    }
+    // Apply style type when provided; default to AUTO for character i2i when unspecified
+    if (styleType) {
+      formData.set("style_type", styleType);
+    } else if (characterImages && characterImages.length > 0) {
+      formData.set("style_type", "AUTO");
     }
 
     // If no character images (pure t2i), require non-empty prompt

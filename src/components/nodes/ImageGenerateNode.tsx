@@ -32,7 +32,9 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
   const [imgRatioSelected, setImgRatioSelected] = useState(initialImgRatio);
   const [imgRatioApplied, setImgRatioApplied] = useState(initialImgRatioApplied);
   const [imgModel, setImgModel] = useState(initialImgModel);
-  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "scale">(null);
+  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "scale" | "speed" | "style">(null);
+  const [ideogramSpeed, setIdeogramSpeed] = useState<string>(asString((d as any)?.ideogramSpeed, "QUALITY"));
+  const [ideogramStyle, setIdeogramStyle] = useState<string>(asString((d as any)?.ideogramStyle, "AUTO"));
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const isImageToImage = Boolean(hasIncomingImageSource?.(id));
   const incomingImageCount = countIncomingImages?.(id) ?? 0;
@@ -383,6 +385,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
       imgRatioApplied: imgRatioApplied,
       imgModel: initialImgModel,
       topazScale,
+      ideogramSpeed,
+      ideogramStyle,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -504,6 +508,8 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
           ...(isImageToImage && upstreamImages.length > 0
             ? { characterImages: upstreamImages.slice(0, 2) }
             : {}),
+          ...(imgModel === "Ideogram Character" ? { renderingSpeed: ideogramSpeed } : {}),
+          ...(imgModel === "Ideogram Character" ? { styleType: ideogramStyle } : {}),
         };
       } else if (isRunway) {
         payload = {
@@ -680,6 +686,81 @@ export function ImageGenerateNode({ id, data, selected }: NodeProps) {
                 </div>
               ) : null}
             </div>
+
+            {/* Ideogram Character Speed */}
+            {imgModel === "Ideogram Character" ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "speed" ? null : "speed")); }}>
+                  <span className="whitespace-nowrap">{ideogramSpeed === "TURBO" ? "Turbo" : ideogramSpeed === "QUALITY" ? "Quality" : "Default"}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Mode</div>
+                {openWhich === "speed" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[200px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {[
+                      { label: "Turbo", value: "TURBO", credits: 124 },
+                      { label: "Default", value: "DEFAULT", credits: 176 },
+                      { label: "Quality", value: "QUALITY", credits: 228 },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          setIdeogramSpeed(opt.value);
+                          update?.(id, { ideogramSpeed: opt.value });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="inline-block w-4">{ideogramSpeed === opt.value ? "✓" : ""}</span>
+                          {opt.label}
+                        </span>
+                        <span className="text-xs whitespace-nowrap">{opt.credits} credits</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Ideogram Character Style */}
+            {imgModel === "Ideogram Character" ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "style" ? null : "style")); }}>
+                  <span className="whitespace-nowrap">{ideogramStyle === "REALISTIC" ? "Realistic" : ideogramStyle === "FICTION" ? "Fiction" : "Auto"}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Style</div>
+                {openWhich === "style" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[200px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {[
+                      { label: "Auto", value: "AUTO" },
+                      { label: "Realistic", value: "REALISTIC" },
+                      { label: "Fiction", value: "FICTION" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          setIdeogramStyle(opt.value);
+                          update?.(id, { ideogramStyle: opt.value });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="inline-block w-4">{ideogramStyle === opt.value ? "✓" : ""}</span>
+                          {opt.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {/* Enhance prompt */}
             <div className="relative group">
               <button
