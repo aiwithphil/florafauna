@@ -31,8 +31,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         "Kling 1.6 Pro",
         "Veo 2",
         "Veo 3",
-        "Minimax Hailuo",
-        "Minimax Hailuo 02 Pro",
+        "Minimax Hailuo O2",
         "Pika",
         "Runway Gen 4 Turbo",
         "Runway Act Two",
@@ -42,7 +41,14 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const hasIncomingImageSource = typeof (d as any)?._hasIncomingImageSource === "function" ? Boolean((d as any)?._hasIncomingImageSource(id)) : false;
   const isInitialKling = ["Kling 2.1 Master", "Kling 2.0 Master", "Kling 1.6 Pro"].includes(initialVidModel);
   const defaultKlingRatio = hasIncomingImageSource ? "auto" : "1:1";
-  const initialVidRatio = asString(d["vidRatio"], isInitialKling ? defaultKlingRatio : "auto");
+  const initialVidRatio = asString(
+    d["vidRatio"],
+    isInitialKling
+      ? defaultKlingRatio
+      : (initialVidModel === "Runway Gen 4 Turbo" || initialVidModel === "Runway Aleph")
+        ? "auto"
+        : (initialVidModel === "Minimax Hailuo O2" ? "16:9" : "16:9")
+  );
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [videoUrl, setVideoUrl] = useState<string | null>((typeof d["videoUrl"] === "string" ? (d["videoUrl"] as string) : null));
   const promptLocked = Boolean((d as any)?.promptLocked);
@@ -58,8 +64,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [warning, setWarning] = useState<string>("");
   const [topazScale, setTopazScale] = useState<string>(asString((d as any)?.topazVideoScale, "2"));
-  const initialDuration = Number.isFinite(Number((d as any)?.vidDuration)) ? Number((d as any)?.vidDuration) : 5;
-  const [durationSec, setDurationSec] = useState<5 | 10>((initialDuration === 10 ? 10 : 5));
+  const initialDuration = Number.isFinite(Number((d as any)?.vidDuration)) ? Number((d as any)?.vidDuration) : (initialVidModel === "Minimax Hailuo O2" ? 6 : 5);
+  const [durationSec, setDurationSec] = useState<5 | 6 | 10>((initialDuration === 10 ? 10 : (initialDuration === 6 ? 6 : 5)));
   function sanitizeEnhancedPrompt(text: string): string {
     let s = (text ?? "").trim();
     s = s.replace(/^\s*(\*\*)?\s*Enhanced Prompt:?\s*(\*\*)?\s*\n*/i, "");
@@ -140,8 +146,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           "Kling 1.6 Pro",
           "Veo 2",
           "Veo 3",
-          "Minimax Hailuo",
-          "Minimax Hailuo 02 Pro",
+          "Minimax Hailuo O2",
           "Pika",
           "Runway Gen 4 Turbo",
           "Runway Act Two",
@@ -161,6 +166,18 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   type SizeOption = { label: string; value: string };
   type SizeGroup = { heading: string; options: SizeOption[] };
   const sizeGroups: SizeGroup[] = React.useMemo(() => {
+    if (vidModel === "Minimax Hailuo O2") {
+      // For image-to-video, display Auto (no wiring change; keep value as 16:9)
+      if (hasIncomingImageSource) {
+        return [
+          { heading: "Auto", options: [{ label: "Auto", value: "16:9" }] },
+        ];
+      }
+      // For text-to-video, show 16:9 explicitly
+      return [
+        { heading: "Horizontal", options: [{ label: "16:9", value: "16:9" }] },
+      ];
+    }
     if (isKling) {
       const groups: SizeGroup[] = [];
       if (hasIncomingImageSource) {
@@ -196,7 +213,18 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         { label: "9:16 (Vertical)", value: "9:16" },
       ]},
     ];
-  }, [isKling, hasIncomingImageSource, isGen4Turbo, isAleph]);
+  }, [vidModel, isKling, hasIncomingImageSource, isGen4Turbo, isAleph]);
+
+  // Ensure selected ratio is valid for current model
+  useEffect(() => {
+    const allValues = sizeGroups.flatMap((g) => g.options.map((o) => o.value));
+    if (allValues.length === 0) return;
+    if (!allValues.includes(vidRatio)) {
+      const next = allValues[0];
+      setVidRatio(next);
+      update?.(id, { vidRatio: next });
+    }
+  }, [sizeGroups, vidRatio, id, update]);
 
   function mapFriendlyRatioToApi(value: string): string {
     switch (value) {
@@ -445,8 +473,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           sourceHeight: dims?.height,
           sourceDuration: dur ?? undefined,
           sourceFrameRate: 30, // best-effort default when fps is unknown
-          outputWidth: dims && Math.round(dims.width * s),
-          outputHeight: dims && Math.round(dims.height * s),
+          outputWidth: dims ? Math.round(dims.width * s) : undefined,
+          outputHeight: dims ? Math.round(dims.height * s) : undefined,
         };
       }
 
@@ -542,7 +570,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
             {vidModel !== "Runway Aleph" && vidModel !== "Topaz" ? (
               <div className="relative group">
                 <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "duration" ? null : "duration")); }}>
-                  <span>{durationSec === 5 ? "5S" : "10S"}</span>
+                  <span>{durationSec}S</span>
                   <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                     <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
                   </svg>
@@ -550,10 +578,11 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                 <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Duration</div>
                 {openWhich === "duration" ? (
                   <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                    {([
-                      { label: "5 Seconds", value: 5 },
-                      { label: "10 Seconds", value: 10 },
-                    ] as const).map((opt) => (
+                    {(
+                      vidModel === "Minimax Hailuo O2"
+                        ? ([{ label: "6 Seconds", value: 6 }] as const)
+                        : ([{ label: "5 Seconds", value: 5 }, { label: "10 Seconds", value: 10 }] as const)
+                    ).map((opt) => (
                       <button
                         key={opt.value}
                         className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center gap-2"
@@ -575,7 +604,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
             {vidModel !== "Topaz" ? (
               <div className="relative group">
                 <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
-                  <span>{vidRatio === "auto" ? "Auto" : vidRatio}</span>
+                  <span>{(vidModel === "Minimax Hailuo O2" && hasIncomingImageSource) ? "Auto" : (vidRatio === "auto" ? "Auto" : vidRatio)}</span>
                   <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                     <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
                   </svg>
@@ -596,8 +625,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                               setOpenWhich(null);
                             }}
                           >
-                            <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.value} /></span>
-                            <span className="flex-1">{ratioLabel(opt.value)}</span>
+                            <span className="inline-flex w-6 justify-center"><AspectIcon value={opt.label === "Auto" ? "auto" : opt.value} /></span>
+                            <span className="flex-1">{(opt as any).label ?? ratioLabel(opt.value)}</span>
                             <span className="inline-flex w-4 justify-end">{vidRatio === opt.value ? "✓" : ""}</span>
                           </button>
                         ))}
@@ -655,7 +684,14 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                       className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
                       onClick={() => {
                         setVidModel(label);
-                        update?.(id, { vidModel: label });
+                        // Coerce defaults when switching to Minimax
+                        if (label === "Minimax Hailuo O2") {
+                          setVidRatio("16:9");
+                          update?.(id, { vidModel: label, vidRatio: "16:9", vidDuration: 6 });
+                          setDurationSec(6);
+                        } else {
+                          update?.(id, { vidModel: label });
+                        }
                         setOpenWhich(null);
                       }}
                     >

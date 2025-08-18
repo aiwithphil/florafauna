@@ -59,13 +59,15 @@ function mapRatioForTextImage(ratio: AllowedVideoRatio): TIAllowedRatio {
 const bodySchema = z.object({
   // Allow empty prompt; some providers (Kling) can run without text
   prompt: z.string().optional().default(""),
-  duration: z.union([z.literal(5), z.literal(10)]).optional().default(5),
+  duration: z.union([z.literal(5), z.literal(6), z.literal(10)]).optional().default(5),
   ratio: z.enum(AllowedVideoRatios).optional().default("1280:720"),
   model: z.enum([
     // Kling
     "Kling 2.1 Master",
     "Kling 2.0 Master",
     "Kling 1.6 Pro",
+    // Minimax
+    "Minimax Hailuo O2",
     // Runway / Topaz
     "Runway Gen 4 Turbo",
     "Runway Act Two",
@@ -221,7 +223,7 @@ export async function POST(req: NextRequest) {
             model_name: klingModel,
             prompt: safePrompt,
             aspect_ratio: aspect,
-            duration: String(duration as 5 | 10),
+            duration: String((duration === 6 ? 5 : (duration as 5 | 10))),
             // Kling i2v expects `image` (and optional `image_tail`)
             image: promptImage,
             ...(tailImage ? { image_tail: tailImage } : {}),
@@ -231,7 +233,7 @@ export async function POST(req: NextRequest) {
             model_name: klingModel,
             prompt: safePrompt,
             aspect_ratio: aspect,
-            duration: String(duration as 5 | 10),
+            duration: String((duration === 6 ? 5 : (duration as 5 | 10))),
             mode: "pro",
           };
 
@@ -449,7 +451,7 @@ export async function POST(req: NextRequest) {
         promptText: prompt,
         publicFigureThreshold: "low",
         ratio: ratio as AllowedVideoRatio,
-        duration: duration as 5 | 10,
+        duration: (duration === 6 ? 5 : (duration as 5 | 10)),
       };
       const videoTask = await client.imageToVideo.create(params).waitForTaskOutput();
       const videoOutput = (videoTask as TaskOutput).output;
@@ -483,12 +485,143 @@ export async function POST(req: NextRequest) {
         promptText: prompt,
         publicFigureThreshold: "low",
         ratio: ratio as AllowedVideoRatio,
-        duration: duration as 5 | 10,
+        duration: (duration === 6 ? 5 : (duration as 5 | 10)),
       };
       const videoTask = await client.videoToVideo.create(actTwoParams).waitForTaskOutput();
       const videoOutput = (videoTask as TaskOutput).output;
       const url = Array.isArray(videoOutput) ? videoOutput[0] : undefined;
       return NextResponse.json({ url });
+    }
+
+    // Minimax – MiniMax-Hailuo-02 (1080p)
+    if (model === "Minimax Hailuo O2") {
+      const apiKey = process.env.MINIMAX_API_KEY;
+      const baseUrl = (process.env.MINIMAX_API_BASE_URL || "https://api.minimax.io").replace(/\/$/, "");
+      if (!apiKey) {
+        return NextResponse.json({ error: "Missing MINIMAX_API_KEY on server" }, { status: 500 });
+      }
+      if (!baseUrl) {
+        return NextResponse.json({ error: "Missing MINIMAX_API_BASE_URL on server" }, { status: 500 });
+      }
+
+      // Build request per docs: MiniMax-Hailuo-02 at 1080p, duration 6 or 10 seconds
+      const createPath = (process.env.MINIMAX_CREATE_PATH || "/v1/video_generation").replace(/\/$/, "");
+      const statusPathTmpl = process.env.MINIMAX_STATUS_PATH || "/v1/query/video_generation?task_id={task_id}";
+      const createUrl = `${baseUrl}${createPath}`;
+      const requestedDuration = duration === 6 || duration === 10 ? duration : 6;
+      // Optional image-to-video: map first upstream image to first_frame_image per docs
+      let firstFrameImage: string | undefined = undefined;
+      if (images && images[0]) {
+        let img = images[0];
+        if (img.startsWith("data:")) {
+          const m = img.match(/^data:[^;]+;base64,(.*)$/);
+          if (m) {
+            img = m[1];
+          }
+        } else if (!/^https?:\/\//i.test(img)) {
+          const origin = computeOrigin();
+          img = `${origin}${img.startsWith("/") ? "" : "/"}${img}`;
+        }
+        firstFrameImage = img;
+      }
+      const payload: Record<string, unknown> = {
+        model: "MiniMax-Hailuo-02",
+        prompt: (prompt && String(prompt).trim().length > 0) ? prompt : " ",
+        // Force 1080p per requirement
+        resolution: "1080P",
+        duration: requestedDuration,
+        prompt_optimizer: true,
+        ...(firstFrameImage ? { first_frame_image: firstFrameImage } : {}),
+      };
+      const createResp = await fetch(createUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(payload),
+      });
+      const createText = await createResp.text();
+      if (!createResp.ok) {
+        return NextResponse.json({ error: `Minimax create failed: ${createResp.status}`, details: createText }, { status: 502 });
+      }
+      let createData: any; try { createData = JSON.parse(createText); } catch { createData = {}; }
+      const taskId: string | undefined = createData?.task_id || createData?.data?.task_id || createData?.id;
+      const hintedUrl: string | undefined = createData?.status_url || createData?.data?.status_url;
+      if (!taskId && !hintedUrl) {
+        // If direct URL returned, allow shortcut
+        const directUrl: string | undefined = createData?.url || createData?.data?.url;
+        if (directUrl && /^https?:\/\//i.test(directUrl)) return NextResponse.json({ url: directUrl });
+        return NextResponse.json({ error: "Minimax create missing task id", raw: createData }, { status: 502 });
+      }
+      const statusUrl = hintedUrl || `${baseUrl}${statusPathTmpl.replace("{task_id}", encodeURIComponent(taskId!))}`;
+      const startedAt = Date.now();
+      const timeoutMs = 30 * 60 * 1000; // up to 30 minutes
+      for (;;) {
+        if (Date.now() - startedAt > timeoutMs) {
+          return NextResponse.json({ error: "Minimax task timed out" }, { status: 504 });
+        }
+        const sResp = await fetch(statusUrl, { method: "GET", headers: { Authorization: `Bearer ${apiKey}` } });
+        const sText = await sResp.text();
+        if (!sResp.ok) {
+          return NextResponse.json({ error: `Minimax status failed: ${sResp.status}`, details: sText }, { status: 502 });
+        }
+        let sData: any; try { sData = JSON.parse(sText); } catch { sData = {}; }
+        const state: string | undefined = sData?.status || sData?.data?.status || sData?.task_status;
+        if (state && String(state).toLowerCase() === "success") {
+          const fileId: string | undefined = sData?.file_id || sData?.data?.file_id;
+          if (!fileId) {
+            return NextResponse.json({ error: "Minimax status missing file_id", raw: sData }, { status: 502 });
+          }
+          const retrievePath = (process.env.MINIMAX_RETRIEVE_PATH || "/v1/files/retrieve").replace(/\/$/, "");
+          const groupId = process.env.MINIMAX_GROUP_ID;
+
+          // Try GET with GroupId first (docs-preferred)
+          if (groupId) {
+            const retrieveUrl = `${baseUrl}${retrievePath}?GroupId=${encodeURIComponent(groupId)}&file_id=${encodeURIComponent(fileId)}`;
+            const rResp = await fetch(retrieveUrl, { method: "GET", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } });
+            const rText = await rResp.text();
+            if (rResp.ok) {
+              let rData: any; try { rData = JSON.parse(rText); } catch { rData = {}; }
+              const url: string | undefined = rData?.file?.download_url || rData?.download_url || rData?.file?.backup_download_url || rData?.backup_download_url;
+              if (url && typeof url === "string") {
+                return NextResponse.json({ url });
+              }
+            }
+          }
+
+          // Fallback GET without GroupId
+          {
+            const retrieveUrl = `${baseUrl}${retrievePath}?file_id=${encodeURIComponent(fileId)}`;
+            const rResp = await fetch(retrieveUrl, { method: "GET", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } });
+            const rText = await rResp.text();
+            if (rResp.ok) {
+              let rData: any; try { rData = JSON.parse(rText); } catch { rData = {}; }
+              const url: string | undefined = rData?.file?.download_url || rData?.download_url || rData?.file?.backup_download_url || rData?.backup_download_url;
+              if (url && typeof url === "string") {
+                return NextResponse.json({ url });
+              }
+            }
+          }
+
+          // Final fallback: POST with GroupId
+          if (groupId) {
+            const retrieveUrl = `${baseUrl}${retrievePath}?GroupId=${encodeURIComponent(groupId)}&file_id=${encodeURIComponent(fileId)}`;
+            const rResp = await fetch(retrieveUrl, { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } });
+            const rText = await rResp.text();
+            if (rResp.ok) {
+              let rData: any; try { rData = JSON.parse(rText); } catch { rData = {}; }
+              const url: string | undefined = rData?.file?.download_url || rData?.download_url || rData?.file?.backup_download_url || rData?.backup_download_url;
+              if (url && typeof url === "string") {
+                return NextResponse.json({ url });
+              }
+            }
+          }
+
+          return NextResponse.json({ error: "Minimax retrieve failed: no download_url in response" }, { status: 502 });
+        }
+        if (state && ["failed", "fail", "error", "canceled", "cancelled"].includes(String(state).toLowerCase())) {
+          return NextResponse.json({ error: "Minimax task failed", details: sData }, { status: 502 });
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
 
     if (model === "Runway Aleph") {
