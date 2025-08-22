@@ -32,7 +32,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         "Veo 2",
         "Veo 3",
         "Minimax Hailuo O2",
-        "Pika",
+        "Seedance Pro 1.0",
         "Runway Gen 4 Turbo",
         "Runway Act Two",
         "Runway Aleph",
@@ -47,7 +47,13 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       ? defaultKlingRatio
       : (initialVidModel === "Runway Gen 4 Turbo" || initialVidModel === "Runway Aleph")
         ? "auto"
-        : (initialVidModel === "Minimax Hailuo O2" ? "16:9" : "16:9")
+        : (initialVidModel === "Minimax Hailuo O2"
+            ? "16:9"
+            : (initialVidModel === "Seedance Pro 1.0"
+                ? (hasIncomingImageSource ? "auto" : "1:1")
+                : "16:9"
+              )
+          )
   );
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [videoUrl, setVideoUrl] = useState<string | null>((typeof d["videoUrl"] === "string" ? (d["videoUrl"] as string) : null));
@@ -60,12 +66,24 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const [isBridgeHover, setIsBridgeHover] = useState(false);
   const [vidRatio, setVidRatio] = useState(initialVidRatio);
   const [vidModel, setVidModel] = useState(initialVidModel);
-  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "duration" | "scale">(null);
+  const [openWhich, setOpenWhich] = useState<null | "ratio" | "model" | "duration" | "scale" | "resolution" | "fixedcam">(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [warning, setWarning] = useState<string>("");
   const [topazScale, setTopazScale] = useState<string>(asString((d as any)?.topazVideoScale, "2"));
-  const initialDuration = Number.isFinite(Number((d as any)?.vidDuration)) ? Number((d as any)?.vidDuration) : (initialVidModel === "Minimax Hailuo O2" ? 6 : 5);
-  const [durationSec, setDurationSec] = useState<5 | 6 | 10>((initialDuration === 10 ? 10 : (initialDuration === 6 ? 6 : 5)));
+  const initialDuration = Number.isFinite(Number((d as any)?.vidDuration)) ? Number((d as any)?.vidDuration) : (initialVidModel === "Minimax Hailuo O2" ? 6 : (initialVidModel === "Seedance Pro 1.0" ? 5 : 5));
+  const [durationSec, setDurationSec] = useState<number>(() => {
+    // Preserve Seedance durations in 3..12 exactly (for duplication and reloads)
+    if (initialVidModel === "Seedance Pro 1.0") {
+      const v = Number(initialDuration);
+      return Number.isFinite(v) ? Math.max(3, Math.min(12, v)) : 5;
+    }
+    // Minimax defaults to 6
+    if (initialVidModel === "Minimax Hailuo O2") return 6;
+    // Other models: constrain to 5/6/10 for stability
+    return (initialDuration === 10 ? 10 : (initialDuration === 6 ? 6 : 5));
+  });
+  const [seedanceResolution, setSeedanceResolution] = useState<string>(asString((d as any)?.seedanceResolution, "1080P"));
+  const [seedanceFixedCamera, setSeedanceFixedCamera] = useState<"yes" | "no">(((d as any)?.seedanceFixedCamera === "yes") ? "yes" : "no");
   function sanitizeEnhancedPrompt(text: string): string {
     let s = (text ?? "").trim();
     s = s.replace(/^\s*(\*\*)?\s*Enhanced Prompt:?\s*(\*\*)?\s*\n*/i, "");
@@ -127,6 +145,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   const isAleph = vidModel === "Runway Aleph";
   const isTopazModel = vidModel === "Topaz";
   const isKling = vidModel === "Kling 2.1 Master" || vidModel === "Kling 2.0 Master" || vidModel === "Kling 1.6 Pro";
+  const isSeedance = vidModel === "Seedance Pro 1.0";
 
   // Determine available models for the current context (e.g., when a video is attached)
   const availableModels = React.useMemo(() => {
@@ -147,7 +166,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
           "Veo 2",
           "Veo 3",
           "Minimax Hailuo O2",
-          "Pika",
+          "Seedance Pro 1.0",
           "Runway Gen 4 Turbo",
           "Runway Act Two",
           "Runway Aleph",
@@ -205,6 +224,25 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         ] },
       ];
     }
+    if (isSeedance) {
+      const groups: SizeGroup[] = [
+        { heading: "Square", options: [{ label: "1:1", value: "1:1" }] },
+        { heading: "Horizontal", options: [
+          { label: "21:9", value: "21:9" },
+          { label: "16:9", value: "16:9" },
+          { label: "4:3", value: "4:3" },
+        ] },
+        { heading: "Vertical", options: [
+          { label: "3:4", value: "3:4" },
+          { label: "9:16", value: "9:16" },
+          { label: "9:21", value: "9:21" },
+        ] },
+      ];
+      if (hasIncomingImageSource) {
+        return [{ heading: "Auto", options: [{ label: "Auto", value: "auto" }] }, ...groups];
+      }
+      return groups;
+    }
     // Fallback to legacy simple list
     return [
       { heading: "Sizes", options: [
@@ -213,7 +251,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         { label: "9:16 (Vertical)", value: "9:16" },
       ]},
     ];
-  }, [vidModel, isKling, hasIncomingImageSource, isGen4Turbo, isAleph]);
+  }, [vidModel, isKling, hasIncomingImageSource, isGen4Turbo, isAleph, isSeedance]);
 
   // Ensure selected ratio is valid for current model
   useEffect(() => {
@@ -234,6 +272,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         return "960:960";
       case "21:9":
         return "1584:672";
+      case "9:21":
+        return "672:1584";
       case "16:9":
         return "1280:720";
       case "4:3":
@@ -378,7 +418,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
   }, [promptLocked, d, prompt]);
 
   useEffect(() => {
-    update?.(id, { prompt: initialPrompt, videoUrl: videoUrl ?? "", vidRatio: initialVidRatio, vidModel: initialVidModel, topazVideoScale: topazScale });
+    update?.(id, { prompt: initialPrompt, videoUrl: videoUrl ?? "", vidRatio: initialVidRatio, vidModel: initialVidModel, topazVideoScale: topazScale, seedanceResolution, seedanceFixedCamera });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -415,6 +455,7 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
       const isAleph = vidModel === "Runway Aleph";
       const isTopaz = vidModel === "Topaz";
       const isKling = vidModel === "Kling 2.1 Master" || vidModel === "Kling 2.0 Master" || vidModel === "Kling 1.6 Pro";
+      const isSeedance = vidModel === "Seedance Pro 1.0";
 
       if (isGen4Turbo && upstreamImages.length < 1) {
         setWarning("This model is image-to-video only. Please attach an image block.");
@@ -453,6 +494,10 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         const imageForAuto = upstreamImages[0];
         apiRatio = imageForAuto ? await pickApiRatioForAutoFromImage(imageForAuto) : "1280:720";
       }
+      // For Seedance, send friendly ratio strings or "adaptive" (not numeric w:h)
+      const seedanceRatio: string | undefined = (isSeedance
+        ? (vidRatio === "auto" ? "adaptive" : vidRatio)
+        : undefined);
 
       // Pre-compute Topaz source and output metadata client-side when possible
       let topazMeta: undefined | {
@@ -484,8 +529,10 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
         body: JSON.stringify({
           ...(vidModel !== "Topaz" ? { prompt: effectivePrompt } : {}),
           duration: durationSec,
-          ...(vidModel !== "Topaz" ? { ratio: apiRatio } : {}),
+          // Do not send provider-agnostic ratio for Seedance; server composes text commands from seedanceRatio
+          ...(vidModel !== "Topaz" && vidModel !== "Seedance Pro 1.0" ? { ratio: apiRatio } : {}),
           model: vidModel,
+          ...(isSeedance ? { seedanceResolution, seedanceFixedCamera, seedanceRatio } : {}),
           // For Kling i2v, support optional end frame via second connected image
           images: isKling ? upstreamImages.slice(0, 2) : upstreamImages.slice(0, 1),
           videos: upstreamVideos.slice(0, 1),
@@ -578,10 +625,12 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                 <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Duration</div>
                 {openWhich === "duration" ? (
                   <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
-                    {(
-                      vidModel === "Minimax Hailuo O2"
-                        ? ([{ label: "6 Seconds", value: 6 }] as const)
-                        : ([{ label: "5 Seconds", value: 5 }, { label: "10 Seconds", value: 10 }] as const)
+                    {(isSeedance
+                      ? Array.from({ length: 10 }, (_, i) => ({ label: `${i + 3} Seconds`, value: i + 3 }))
+                      : (vidModel === "Minimax Hailuo O2"
+                          ? ([{ label: "6 Seconds", value: 6 }] as const)
+                          : ([{ label: "5 Seconds", value: 5 }, { label: "10 Seconds", value: 10 }] as const)
+                        )
                     ).map((opt) => (
                       <button
                         key={opt.value}
@@ -600,8 +649,8 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                 ) : null}
               </div>
             ) : null}
-            {/* Ratio (hidden for Topaz) */}
-            {vidModel !== "Topaz" ? (
+            {/* Ratio (hidden for Topaz, and for Seedance i2v where only adaptive is allowed) */}
+            {vidModel !== "Topaz" && !(isSeedance && hasIncomingImageSource) ? (
               <div className="relative group">
                 <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "ratio" ? null : "ratio")); }}>
                   <span>{(vidModel === "Minimax Hailuo O2" && hasIncomingImageSource) ? "Auto" : (vidRatio === "auto" ? "Auto" : vidRatio)}</span>
@@ -631,6 +680,68 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                           </button>
                         ))}
                       </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Seedance Resolution */}
+            {isSeedance ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "resolution" ? null : "resolution")); }}>
+                  <span>{seedanceResolution}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Resolution</div>
+                {openWhich === "resolution" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {["480P", "720P", "1080P"].map((res) => (
+                      <button
+                        key={res}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          setSeedanceResolution(res);
+                          update?.(id, { seedanceResolution: res });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span>{res}</span>
+                        <span className="text-xs">{seedanceResolution === res ? "✓" : ""}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Seedance Fixed Camera */}
+            {isSeedance ? (
+              <div className="relative group">
+                <button className="text-sm px-3 py-1.5 rounded hover:bg-foreground/10 inline-flex items-center gap-1" onClick={() => { selectNode?.(id); setOpenWhich((w) => (w === "fixedcam" ? null : "fixedcam")); }}>
+                  <span>{seedanceFixedCamera === "yes" ? "Yes" : "No"}</span>
+                  <svg className="w-4 h-4 text-foreground/70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-foreground opacity-0 group-hover:opacity-100 transition-opacity font-semibold">Fixed Camera</div>
+                {openWhich === "fixedcam" ? (
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 min-w-[160px] bg-background border rounded-md shadow-lg overflow-hidden text-sm">
+                    {[{ label: "No", value: "no" as const }, { label: "Yes", value: "yes" as const }].map((opt) => (
+                      <button
+                        key={opt.value}
+                        className="w-full text-left px-3 py-2 hover:bg-foreground/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          setSeedanceFixedCamera(opt.value);
+                          update?.(id, { seedanceFixedCamera: opt.value });
+                          setOpenWhich(null);
+                        }}
+                      >
+                        <span>{opt.label}</span>
+                        <span className="text-xs">{seedanceFixedCamera === opt.value ? "✓" : ""}</span>
+                      </button>
                     ))}
                   </div>
                 ) : null}
@@ -689,6 +800,13 @@ export function VideoGenerateNode({ id, data, selected }: NodeProps) {
                           setVidRatio("16:9");
                           update?.(id, { vidModel: label, vidRatio: "16:9", vidDuration: 6 });
                           setDurationSec(6);
+                        } else if (label === "Seedance Pro 1.0") {
+                          const nextRatio = hasIncomingImageSource ? "auto" : "1:1";
+                          setVidRatio(nextRatio);
+                          setDurationSec(5);
+                          setSeedanceResolution("1080P");
+                          setSeedanceFixedCamera("no");
+                          update?.(id, { vidModel: label, vidRatio: nextRatio, vidDuration: 5, seedanceResolution: "1080P", seedanceFixedCamera: "no" });
                         } else {
                           update?.(id, { vidModel: label });
                         }

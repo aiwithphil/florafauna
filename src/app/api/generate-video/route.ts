@@ -13,6 +13,8 @@ const AllowedVideoRatios = [
   "832:1104",
   "960:960",
   "1584:672",
+  // Add reverse widescreen for 9:21 (vertical ultra-wide)
+  "672:1584",
 ] as const;
 
 type AllowedVideoRatio = (typeof AllowedVideoRatios)[number];
@@ -59,7 +61,7 @@ function mapRatioForTextImage(ratio: AllowedVideoRatio): TIAllowedRatio {
 const bodySchema = z.object({
   // Allow empty prompt; some providers (Kling) can run without text
   prompt: z.string().optional().default(""),
-  duration: z.union([z.literal(5), z.literal(6), z.literal(10)]).optional().default(5),
+  duration: z.number().int().min(3).max(12).optional().default(5),
   ratio: z.enum(AllowedVideoRatios).optional().default("1280:720"),
   model: z.enum([
     // Kling
@@ -68,6 +70,8 @@ const bodySchema = z.object({
     "Kling 1.6 Pro",
     // Minimax
     "Minimax Hailuo O2",
+    // Seedance
+    "Seedance Pro 1.0",
     // Runway / Topaz
     "Runway Gen 4 Turbo",
     "Runway Act Two",
@@ -77,6 +81,10 @@ const bodySchema = z.object({
   images: z.array(z.string().min(1)).optional().default([]),
   videos: z.array(z.string().min(1)).optional().default([]),
   topazScale: z.union([z.literal("2"), z.literal("3"), z.literal("4")]).optional(),
+  // Seedance-only fields
+  seedanceResolution: z.enum(["480P", "720P", "1080P"]).optional(),
+  seedanceFixedCamera: z.enum(["yes", "no"]).optional(),
+  seedanceRatio: z.string().optional(),
   // Optional Topaz source/output hints from client probing
   topazSourceWidth: z.number().int().positive().optional(),
   topazSourceHeight: z.number().int().positive().optional(),
@@ -110,7 +118,7 @@ export async function POST(req: NextRequest) {
     }
 
     const json = await req.json();
-    const { prompt, duration, ratio, model, images, videos, topazScale, topazSourceWidth, topazSourceHeight, topazSourceDuration, topazSourceFrameRate, topazOutputWidth, topazOutputHeight } = bodySchema.parse(json);
+    const { prompt, duration, ratio, model, images, videos, topazScale, seedanceResolution, seedanceFixedCamera, seedanceRatio, topazSourceWidth, topazSourceHeight, topazSourceDuration, topazSourceFrameRate, topazOutputWidth, topazOutputHeight } = bodySchema.parse(json);
 
     // Helpers shared by all providers
     function computeOrigin(): string {
@@ -429,6 +437,119 @@ export async function POST(req: NextRequest) {
 
       // Unknown scheme; reject
       return null;
+    }
+
+    // Seedance (BytePlus ModelArk) integration
+    if (model === "Seedance Pro 1.0") {
+      const apiKey = process.env.SEEDANCE_API_KEY || process.env.ARK_API_KEY;
+      if (!apiKey) {
+        return NextResponse.json({ error: "Missing SEEDANCE_API_KEY/ARK_API_KEY on server" }, { status: 500 });
+      }
+      // Base URL and endpoints per BytePlus ModelArk Video Generation
+      const baseUrl = (process.env.SEEDANCE_API_BASE_URL || "https://ark.ap-southeast.bytepluses.com").replace(/\/$/, "");
+      const createPath = (process.env.SEEDANCE_CREATE_PATH || "/api/v3/contents/generations/tasks").replace(/\/$/, "");
+      const statusPath = process.env.SEEDANCE_STATUS_PATH || "/api/v3/contents/generations/tasks/{task_id}";
+
+      const isImageToVideo = Array.isArray(images) && images.length > 0;
+      // Map allowed UI ratios to provider-friendly sizes if needed (keep aspect as ratio string where provider supports)
+      // Use friendly ratio string for Seedance; fall back to provided seedanceRatio if set by UI
+      const requestedRatio = (typeof seedanceRatio === "string" && seedanceRatio.length > 0)
+        ? seedanceRatio
+        : (() => {
+            // Map numeric w:h ratio to friendly if it sneaks in
+            switch (ratio as AllowedVideoRatio) {
+              case "960:960": return "1:1";
+              case "1280:720": return "16:9";
+              case "720:1280": return "9:16";
+              case "1104:832": return "4:3";
+              case "832:1104": return "3:4";
+              case "1584:672": return "21:9";
+              case "672:1584": return "9:21";
+              default: return "16:9";
+            }
+          })();
+      // Duration: use provided 3-12 seconds directly
+      const requestedDuration = Math.max(3, Math.min(12, Number(duration) || 5));
+
+      // Ensure assets are HTTPS or proxy-able; ModelArk requires a fetchable https URL
+      let imageUrl: string | undefined = images[0];
+      if (imageUrl) {
+        if (imageUrl.startsWith("data:")) {
+          const ensured = toPublicDownloadUrlIfDataUrl(imageUrl, "image.png");
+          imageUrl = ensured;
+        } else if (imageUrl.startsWith("http://")) {
+          imageUrl = toPublicDownloadUrl(imageUrl, "image.png");
+        } else if (!/^https?:\/\//i.test(imageUrl)) {
+          const origin = computeOrigin();
+          imageUrl = `${origin}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
+        }
+      }
+      if (isImageToVideo && (!imageUrl || !/^https:\/\//i.test(imageUrl))) {
+        return NextResponse.json({ error: "Seedance i2v requires an HTTPS-accessible image URL. Set PUBLIC_BASE_URL to an https origin or provide an https image URL." }, { status: 400 });
+      }
+
+      const seedanceModelId = process.env.SEEDANCE_MODEL_ID || "seedance-pronew";
+      const resolutionCmd = (seedanceResolution || "1080P").toLowerCase();
+      const ratioCmd = isImageToVideo ? "adaptive" : (requestedRatio === "auto" ? "adaptive" : requestedRatio);
+      const fixedCamCmd = seedanceFixedCamera === "yes" ? "true" : "false";
+      const baseText = (prompt && String(prompt).trim().length > 0) ? prompt.trim() : "";
+      const commandSuffix = ` --resolution ${resolutionCmd} --ratio ${ratioCmd} --duration ${requestedDuration} --camerafixed ${fixedCamCmd}`;
+      const composedText = `${baseText}${commandSuffix}`.trim() || " ";
+      const payload: Record<string, unknown> = {
+        model: seedanceModelId,
+        content: [
+          { type: "text", text: composedText },
+          ...(isImageToVideo && imageUrl ? [{ type: "image_url", image_url: { url: imageUrl } }] : []),
+        ],
+      };
+
+      const createUrl = `${baseUrl}${createPath}`;
+      const createResp = await fetch(createUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const createText = await createResp.text();
+      if (!createResp.ok) {
+        return NextResponse.json({ error: `Seedance create failed: ${createResp.status}`, details: createText }, { status: 502 });
+      }
+      let createData: any; try { createData = JSON.parse(createText); } catch { createData = {}; }
+      const taskId: string | undefined = createData?.id || createData?.task_id || createData?.data?.task_id;
+      const hintedUrl: string | undefined = createData?.status_url || createData?.data?.status_url;
+      if (!taskId && !hintedUrl) {
+        const directUrl: string | undefined = createData?.url || createData?.data?.url;
+        if (directUrl && /^https?:\/\//i.test(directUrl)) return NextResponse.json({ url: directUrl });
+        return NextResponse.json({ error: "Seedance create missing task id", raw: createData }, { status: 502 });
+      }
+      const statusUrl = hintedUrl || `${baseUrl}${statusPath.replace("{task_id}", encodeURIComponent(taskId!))}`;
+      const startedAt = Date.now();
+      const timeoutMs = 30 * 60 * 1000;
+      for (;;) {
+        if (Date.now() - startedAt > timeoutMs) {
+          return NextResponse.json({ error: "Seedance task timed out" }, { status: 504 });
+        }
+        const sResp = await fetch(statusUrl, { method: "GET", headers: { Authorization: `Bearer ${apiKey}` } });
+        const sText = await sResp.text();
+        if (!sResp.ok) {
+          return NextResponse.json({ error: `Seedance status failed: ${sResp.status}`, details: sText }, { status: 502 });
+        }
+        let sData: any; try { sData = JSON.parse(sText); } catch { sData = {}; }
+        const state: string | undefined = sData?.status || sData?.data?.status || sData?.task_status;
+        if (state && ["succeeded", "success", "finished", "completed"].includes(String(state).toLowerCase())) {
+          const url: string | undefined = sData?.content?.video_url || sData?.video_url || sData?.data?.video_url || sData?.result?.video_url || sData?.data?.result?.video_url || sData?.url || sData?.data?.url;
+          if (url && typeof url === "string") return NextResponse.json({ url });
+          const out: string | undefined = sData?.output?.[0] || sData?.data?.output?.[0];
+          if (out && /^https?:\/\//i.test(out)) return NextResponse.json({ url: out });
+          return NextResponse.json({ error: "Seedance succeeded but no URL in response", raw: sData }, { status: 502 });
+        }
+        if (state && ["failed", "error", "canceled", "cancelled"].includes(String(state).toLowerCase())) {
+          return NextResponse.json({ error: "Seedance task failed", details: sData }, { status: 502 });
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
 
     // Route by model
